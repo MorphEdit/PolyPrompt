@@ -84,10 +84,11 @@ export function protect(text) {
 
 // Markdown structure that never goes to the translator: the line prefix
 // (indent, quote, heading, list marker, task box) and inline markers
-// (emphasis, strike, table pipes, link brackets).
+// (emphasis, strike, table pipes, link brackets). Placeholders for protected
+// spans are split out too: NLLB drops or mangles them (⟦0⟧ -> 0).
 const LINE_BREAK = /(\r?\n)/;
 const LINE_PREFIX = /^[^\S\n]*(?:>[^\S\n]?)*(?:#{1,6}(?=\s|$)|(?:[-*+]|\d+[.)])(?=\s)(?:\s+\[[ xX]\](?=\s))?)?[^\S\n]*/;
-const INLINE_MARKER = /(\*+|~~|(?<![\p{L}\p{N}_])_+|_+(?![\p{L}\p{N}_])|\||!?\[|\]\([^)\s]*\))/u;
+const INLINE_MARKER = /(⟦\d+⟧|\*+|~~|(?<![\p{L}\p{N}_])_+|_+(?![\p{L}\p{N}_])|\||!?\[|\]\([^)\s]*\))/u;
 const EDGE_SPACE = /^(\s*)([\s\S]*?)(\s*)$/;
 // One unit of up to 20 chars repeated 8+ times in a row.
 const REPEAT = /(\S.{0,19}?)\1{7,}/su;
@@ -112,11 +113,19 @@ export function isDegenerate(src, out) {
   return tokens.length >= 12 && new Set(tokens).size * 4 <= tokens.length;
 }
 
+// Remove a line prefix (list marker, heading, quote) the translator added to a
+// piece whose source has none, e.g. "สวัสดี" -> "- What's up?".
+function dropAddedPrefix(src, out) {
+  if (typeof out !== 'string' || LINE_PREFIX.exec(src)[0].trim()) return out;
+  const prefix = LINE_PREFIX.exec(out)[0];
+  return prefix.trim() ? out.slice(prefix.length) : out;
+}
+
 // Translate one piece; on degenerate output retry sentence by sentence, and
 // fall back to the source piece rather than show garbage.
 async function translatePiece(translator, piece, srcLang, tgtLang) {
   if (!hasLetters(piece)) return piece;
-  const out = await translator.translate(piece, srcLang, tgtLang);
+  const out = dropAddedPrefix(piece, await translator.translate(piece, srcLang, tgtLang));
   if (!isDegenerate(piece, out)) return out;
   const sentences = splitAt(piece, SENTENCE_END);
   if (sentences.length < 2) return piece;
