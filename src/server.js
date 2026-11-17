@@ -31,6 +31,14 @@ export function requireModelReady(res, modelManager) {
   return false;
 }
 
+// The id is passed raw (still percent-encoded); the chat store rejects
+// anything that is not a valid chat id.
+const CHAT_PATH = /^\/api\/chats\/(?<id>[^/]+)$/;
+
+// Pending-reply registry { get(chatId) -> step|null }; filled in by the send pipeline.
+const noPending = { get: () => null };
+const pendingOf = (deps) => deps.pending ?? noPending;
+
 // API routes: { method, path (string, or RegExp with named groups), handler(ctx) }
 // where ctx = { req, res, params, deps }. Later issues append entries here.
 export const routes = [
@@ -45,6 +53,32 @@ export const routes = [
     handler: ({ res, deps }) => {
       deps.modelManager.retry();
       sendJson(res, 202, { model: deps.modelManager.status() });
+    },
+  },
+  {
+    method: 'GET',
+    path: '/api/chats',
+    handler: async ({ res, deps }) => sendJson(res, 200, await deps.chatStore.list()),
+  },
+  {
+    method: 'GET',
+    path: CHAT_PATH,
+    handler: async ({ res, params, deps }) => {
+      const chat = await deps.chatStore.get(params.id);
+      if (!chat) return sendError(res, 404, 'chat not found');
+      sendJson(res, 200, { ...chat, pendingStep: pendingOf(deps).get(chat.id) ?? null });
+    },
+  },
+  {
+    method: 'DELETE',
+    path: CHAT_PATH,
+    handler: async ({ res, params, deps }) => {
+      const chat = await deps.chatStore.get(params.id);
+      if (!chat) return sendError(res, 404, 'chat not found');
+      if (pendingOf(deps).get(chat.id) != null) return sendError(res, 409, 'a reply is pending in this chat');
+      if (!(await deps.chatStore.remove(chat.id))) return sendError(res, 404, 'chat not found');
+      res.writeHead(204);
+      res.end();
     },
   },
 ];
@@ -97,7 +131,7 @@ async function serveStatic(req, res, publicDir, pathname) {
   }
 }
 
-// deps: { modelManager, publicDir, ...more added by later issues }.
+// deps: { modelManager, publicDir, chatStore, pending?, ...more added by later issues }.
 export function createApp(deps) {
   return http.createServer(async (req, res) => {
     try {
