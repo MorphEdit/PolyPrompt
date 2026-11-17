@@ -10,5 +10,9 @@
   "scripts": {
     "start": "node src/main.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "eld": "^2.1.1"
   }
 }
