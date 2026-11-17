@@ -1,12 +1,15 @@
 // Send/retry pipeline: detect -> translate -> Claude -> translate back -> save.
 import { newId } from './store.js';
 import { translateText } from './text.js';
+import { NotTranslatedError } from './translator.js';
 
 export const ENGLISH = 'en';
 export const MAX_CHARS = 2000;
 export const UNSUPPORTED_NOTE = 'ภาษานี้ยังไม่รองรับการแปล จึงแสดงคำตอบเป็นภาษาอังกฤษ';
 export const TRANSLATE_FAILED = 'แปลข้อความไม่สำเร็จ กรุณาลองส่งใหม่';
 export const TURN_FAILED = 'เกิดข้อผิดพลาด กรุณาลองส่งใหม่';
+export const NOT_TRANSLATED_NOTE = 'แปลข้อความไม่สำเร็จ จึงส่งข้อความตามที่พิมพ์ให้ Claude';
+export const ANSWER_NOT_TRANSLATED_NOTE = 'แปลคำตอบไม่สำเร็จ จึงแสดงคำตอบเป็นภาษาอังกฤษ';
 
 // In-memory registry chatId -> 'translating' | 'thinking' | 'translating_back'.
 export function createPending() {
@@ -20,10 +23,13 @@ export function createPending() {
 
 class TranslateError extends Error {}
 
+// Resolves to the translation, or to null when the model kept returning
+// something other than a translation (the caller then falls back).
 async function translate(translator, text, src, tgt, maxChars) {
   try {
     return await translateText(translator, text, src, tgt, { maxChars });
   } catch (err) {
+    if (err instanceof NotTranslatedError) return null;
     throw new TranslateError(err?.message ?? String(err));
   }
 }
@@ -56,9 +62,16 @@ export async function runTurn(deps, chat, message) {
     else if (detected.kind !== 'unsupported') lang = chat.lang ?? ENGLISH;
     const foreign = supported && lang !== ENGLISH;
 
-    const english = foreign
-      ? await translate(translator, message.original, lang, ENGLISH, maxChars)
-      : message.original;
+    const notes = [];
+    let english = message.original;
+    if (foreign) {
+      // Not translatable: Claude gets the text as typed (it reads every language).
+      english = await translate(translator, message.original, lang, ENGLISH, maxChars);
+      if (english === null) {
+        english = message.original;
+        notes.push(NOT_TRANSLATED_NOTE);
+      }
+    }
 
     message.lang = lang;
     message.english = english;
@@ -72,6 +85,10 @@ export async function runTurn(deps, chat, message) {
     if (foreign) {
       pending.set(id, 'translating_back');
       shown = await translate(translator, answer.text, ENGLISH, lang, maxChars);
+      if (shown === null) {
+        shown = answer.text;
+        notes.push(ANSWER_NOT_TRANSLATED_NOTE);
+      }
     }
 
     delete message.error;
@@ -84,7 +101,8 @@ export async function runTurn(deps, chat, message) {
       lang: supported ? lang : ENGLISH,
       createdAt: new Date().toISOString(),
     };
-    if (!supported) reply.note = UNSUPPORTED_NOTE;
+    if (!supported) notes.push(UNSUPPORTED_NOTE);
+    if (notes.length) reply.note = notes.join(' ');
     chat.messages.push(reply);
     chat.sessionId = answer.sessionId ?? chat.sessionId ?? null;
     await chatStore.save(chat);

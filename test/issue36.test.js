@@ -1,0 +1,129 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  NotTranslatedError, buildPrompt, createTranslator, looksLikeTranslation, maxTokensFor,
+} from '../src/translator.js';
+import { translateText } from '../src/text.js';
+
+const SOURCE = 'ช่วยแนะนำวิธีนอนหลับให้ดีขึ้น 3 ข้อ แบบสั้นๆ';
+const ANSWER = '1. Establish a regular sleep schedule.\n2. Create a relaxing bedtime routine.\n'
+  + '3. Avoid screens and caffeine before bed.';
+
+function fake(replies) {
+  const calls = [];
+  const complete = async (prompt, opts) => {
+    calls.push({ prompt, opts });
+    return typeof replies === 'function' ? replies(calls.length) : replies;
+  };
+  return { complete, calls };
+}
+
+test('an answer instead of a translation is retried once and then rejected (#36)', async () => {
+  const { complete, calls } = fake(ANSWER);
+  await assert.rejects(createTranslator(complete).translate(SOURCE, 'th', 'en'), NotTranslatedError);
+  assert.equal(calls.length, 2, 'the translator retries once');
+  assert.notEqual(calls[1].prompt, calls[0].prompt, 'the retry uses a sturdier prompt');
+  assert.match(calls[1].prompt, /do not answer/i);
+  assert.ok(calls[1].prompt.endsWith(`\n\n\n${SOURCE}`));
+});
+
+test('a retry that translates is returned (#36)', async () => {
+  const { complete, calls } = fake((n) => (n === 1 ? ANSWER : 'Please suggest 3 short tips for better sleep.'));
+  const out = await createTranslator(complete).translate(SOURCE, 'th', 'en');
+  assert.equal(out, 'Please suggest 3 short tips for better sleep.');
+  assert.equal(calls.length, 2);
+});
+
+test('output in the wrong language for the target is retried and rejected (#36)', async () => {
+  const { complete, calls } = fake('ช่วยแนะนำวิธีนอนหลับ');
+  await assert.rejects(
+    createTranslator(complete).translate('Please suggest 3 short tips for better sleep.', 'en', 'de'),
+    NotTranslatedError,
+  );
+  assert.equal(calls.length, 2);
+});
+
+test('English output for a German target is rejected once long enough to detect (#36)', () => {
+  const src = 'Please suggest three short tips for better sleep tonight.';
+  assert.equal(looksLikeTranslation(src, 'Here are three tips: keep a schedule and avoid caffeine late.', 'en', 'de'), false);
+  assert.equal(looksLikeTranslation(src, 'Bitte schlage drei kurze Tipps für besseren Schlaf heute Nacht vor.', 'en', 'de'), true);
+});
+
+test('a good translation passes on the first call (#36)', async () => {
+  const { complete, calls } = fake('Please suggest 3 short tips for better sleep.');
+  assert.equal(await createTranslator(complete).translate(SOURCE, 'th', 'en'),
+    'Please suggest 3 short tips for better sleep.');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].prompt, buildPrompt(SOURCE, 'th', 'en'));
+});
+
+test('looksLikeTranslation rejects list lines, extra lines and runaway length (#36)', () => {
+  assert.equal(looksLikeTranslation(SOURCE, ANSWER, 'th', 'en'), false);
+  assert.equal(looksLikeTranslation(SOURCE, 'Sure, here you go.\nSleep more.', 'th', 'en'), false);
+  assert.equal(looksLikeTranslation('สวัสดี', 'Hello! How can I help you today with anything at all?', 'th', 'en'), false);
+  // Short and name-like output is not judged by language; CJK sources may grow a lot in English.
+  assert.equal(looksLikeTranslation('React', 'React', 'en', 'th'), true);
+  assert.equal(looksLikeTranslation('谢谢你的帮助', 'Thank you for your help', 'zh', 'en'), true);
+  assert.equal(looksLikeTranslation('สวัสดี', 'Hello', 'th', 'en'), true);
+  // A source with several lines may keep them.
+  assert.equal(looksLikeTranslation('หนึ่ง\nสอง', 'One\nTwo', 'th', 'en'), true);
+});
+
+test('maxTokens is bounded by the input length (#36)', async () => {
+  assert.ok(maxTokensFor(SOURCE) < 200);
+  assert.ok(maxTokensFor('x'.repeat(10)) >= 64);
+  assert.equal(maxTokensFor('x'.repeat(5000)), 2048);
+  const { complete, calls } = fake('Please suggest 3 short tips for better sleep.');
+  await createTranslator(complete).translate(SOURCE, 'th', 'en');
+  assert.deepEqual(calls[0].opts, { maxTokens: maxTokensFor(SOURCE) });
+});
+
+test('output in a third language with the target script is retried and rejected (#36)', async () => {
+  const src = 'Please suggest three short tips for better sleep tonight, please.';
+  const french = 'Veuillez suggérer trois conseils courts pour mieux dormir ce soir, s’il vous plaît.';
+  assert.equal(looksLikeTranslation(src, french, 'en', 'de'), false);
+  const { complete, calls } = fake(french);
+  await assert.rejects(createTranslator(complete).translate(src, 'en', 'de'), NotTranslatedError);
+  assert.equal(calls.length, 2);
+});
+
+test('a translation detected as a close sibling of the target is kept (#36)', () => {
+  assert.equal(looksLikeTranslation('Use React and Vue together today.', 'Brug React og Vue sammen i dag.', 'en', 'no'), true);
+});
+
+test('a non-Latin translation full of Latin product names is kept (#36)', async () => {
+  const src = 'Use React, Vue, Svelte and Angular together.';
+  const thai = 'ใช้ React, Vue, Svelte และ Angular ร่วมกัน';
+  const { complete, calls } = fake(thai);
+  assert.equal(await createTranslator(complete).translate(src, 'en', 'th'), thai);
+  assert.equal(calls.length, 1);
+  // An English answer for a Thai target is still rejected.
+  assert.equal(looksLikeTranslation(src, 'Sure, React, Vue, Svelte and Angular work well together.', 'en', 'th'), false);
+});
+
+test('a short sentence left in English for a Thai target is retried and rejected (#36)', async () => {
+  const src = 'Please suggest 3 short tips for better sleep.';
+  const { complete, calls } = fake(src);
+  await assert.rejects(translateText(createTranslator(complete), src, 'en', 'th'), NotTranslatedError);
+  assert.equal(calls.length, 2);
+});
+
+test('a short sentence in a third Latin language is retried and rejected (#36)', async () => {
+  const { complete, calls } = fake('Bonjour, voici trois conseils.');
+  await assert.rejects(
+    translateText(createTranslator(complete), 'Here are three tips for you.', 'en', 'de'), NotTranslatedError);
+  assert.equal(calls.length, 2);
+});
+
+test('short names kept as they are and short correct translations are kept (#36)', async () => {
+  for (const [src, out, from, to] of [
+    ['Visual Studio Code', 'Visual Studio Code', 'en', 'th'],
+    ['React', 'React', 'en', 'de'],
+    ['Here are three tips for you.', 'Hier sind drei Tipps für dich.', 'en', 'de'],
+    ['Here are three tips.', 'Voici trois conseils.', 'en', 'fr'],
+  ]) {
+    const { complete, calls } = fake(out);
+    assert.equal(await translateText(createTranslator(complete), src, from, to), out, `${src} -> ${to}`);
+    assert.equal(calls.length, 1);
+  }
+});
