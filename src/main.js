@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createClaudeRunner } from './claude.js';
+import { detectLanguage } from './lang.js';
 import { createModelManager } from './model.js';
 import { createApp } from './server.js';
 import { createChatStore } from './store.js';
@@ -22,6 +24,8 @@ export async function start({
   const app = createApp({
     modelManager,
     chatStore,
+    runner: createClaudeRunner(),
+    detect: detectLanguage,
     publicDir: path.join(root, 'public'),
   });
 
