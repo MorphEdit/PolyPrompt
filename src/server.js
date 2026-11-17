@@ -88,9 +88,12 @@ export const routes = [
     method: 'GET',
     path: CHAT_PATH,
     handler: async ({ res, params, deps }) => {
+      // Read the step before the file: a turn saves before it clears its step,
+      // so a null step here means the file read below is already final.
+      const pendingStep = pendingOf(deps).get(params.id) ?? null;
       const chat = await deps.chatStore.get(params.id);
       if (!chat) return sendError(res, 404, 'chat not found');
-      sendJson(res, 200, { ...chat, pendingStep: pendingOf(deps).get(chat.id) ?? null });
+      sendJson(res, 200, { ...chat, pendingStep });
     },
   },
   {
