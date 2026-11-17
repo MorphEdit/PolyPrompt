@@ -12,6 +12,7 @@ npm start
 ```
 
 Open the URL it prints (default `http://127.0.0.1:3210`; set `PORT` to change it).
+Claude runs in its own folder, `~/.polyprompt/claude-home` (set `CLAUDE_HOME_DIR` to change it), so it never sees this repo or your files.
 The server only listens on `127.0.0.1`.
 
 Run the tests with `npm test`. Install the dependencies first (`npm ci`): the tests
