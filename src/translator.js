@@ -41,10 +41,21 @@ export function createProgressTracker(onProgress = () => {}, { expectedBytes = 0
 // Set POLYPROMPT_OFFLINE=1 to forbid network access (cache only).
 export async function loadNllbTranslator(
   onProgress,
-  { offline = process.env.POLYPROMPT_OFFLINE === '1', cacheDir = CACHE_DIR } = {},
+  {
+    offline = process.env.POLYPROMPT_OFFLINE === '1',
+    cacheDir = CACHE_DIR,
+    importLib = () => import('@huggingface/transformers'),
+  } = {},
 ) {
   const tracker = createProgressTracker(onProgress, { expectedBytes: EXPECTED_BYTES });
-  const { pipeline, env } = await import('@huggingface/transformers');
+  let lib;
+  try {
+    lib = await importLib();
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND') throw err;
+    throw new Error('Translation library @huggingface/transformers not found: run npm ci', { cause: err });
+  }
+  const { pipeline, env } = lib;
   env.cacheDir = cacheDir;
   env.allowRemoteModels = !offline;
   const pipe = await pipeline('translation', MODEL_ID, {

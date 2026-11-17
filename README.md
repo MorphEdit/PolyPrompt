@@ -14,7 +14,8 @@ npm start
 Open the URL it prints (default `http://127.0.0.1:3210`; set `PORT` to change it).
 The server only listens on `127.0.0.1`.
 
-Run the tests with `npm test`.
+Run the tests with `npm test`. Install the dependencies first (`npm ci`): the tests
+import them, so a fresh checkout without `node_modules` fails.
 
 ## Translation model
 

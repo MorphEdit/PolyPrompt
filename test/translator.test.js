@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
 import { createProgressTracker } from '../src/translator.js';
 
 test('progress is aggregated across files, non-decreasing, within 0..1, ending at 1', () => {
@@ -51,4 +53,17 @@ test('with no network and no cache, loading fails and the model manager reports 
   } finally {
     await fs.rm(cacheDir, { recursive: true, force: true });
   }
+});
+
+test('a missing transformers.js install fails with an actionable message', { timeout: 60000 }, async () => {
+  const { loadNllbTranslator } = await import('../src/translator.js');
+  // offline with an empty cache dir: never downloads, even if importLib were ignored
+  const opts = { offline: true, cacheDir: path.join(os.tmpdir(), 'polyprompt-none-' + process.pid) };
+  const missing = Object.assign(new Error("Cannot find package '@huggingface/transformers'"), { code: 'ERR_MODULE_NOT_FOUND' });
+  await assert.rejects(
+    loadNllbTranslator(() => {}, { ...opts, importLib: () => Promise.reject(missing) }),
+    (err) => /not found: run npm ci/.test(err.message) && err.cause === missing,
+  );
+  const other = new Error('boom');
+  await assert.rejects(loadNllbTranslator(() => {}, { ...opts, importLib: () => Promise.reject(other) }), (err) => err === other);
 });
