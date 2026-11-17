@@ -29,3 +29,13 @@ translation then works offline. Set `POLYPROMPT_OFFLINE=1` to forbid any downloa
 Language detection uses the offline [`eld`](https://github.com/nitotm/efficient-language-detector-js)
 library (60 languages, all mapped to NLLB codes in `src/lang.js`).
 Texts with fewer than 3 letters (e.g. "ok", "555") count as "unsure".
+
+## Claude Code
+
+PolyPrompt sends the English prompt to Claude through your own
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI, so Claude Code
+must be installed and logged in: run `claude` once in a terminal and type `/login`.
+No API key is used. Each chat continues its own Claude Code session, and Claude
+gets no tools (it only answers in text). If `claude` is missing, not logged in,
+fails or takes longer than 5 minutes, the message stays in the chat with an error
+and a "ส่งใหม่" (retry) button.

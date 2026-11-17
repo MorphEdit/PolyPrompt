@@ -2,6 +2,9 @@ import http from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { detectLanguage } from './lang.js';
+import { createPending, runTurn } from './pipeline.js';
+import { newId } from './store.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -35,9 +38,30 @@ export function requireModelReady(res, modelManager) {
 // anything that is not a valid chat id.
 const CHAT_PATH = /^\/api\/chats\/(?<id>[^/]+)$/;
 
-// Pending-reply registry { get(chatId) -> step|null }; filled in by the send pipeline.
-const noPending = { get: () => null };
-const pendingOf = (deps) => deps.pending ?? noPending;
+const RETRY_PATH = /^\/api\/chats\/(?<id>[^/]+)\/messages\/(?<messageId>[^/]+)\/retry$/;
+
+// Pending-reply registry { get(chatId) -> step|null, set, clear } (see pipeline.js).
+const pendingOf = (deps) => deps.pending;
+
+const MAX_BODY = 1_000_000;
+
+async function readJson(req) {
+  let body = '';
+  for await (const chunk of req.setEncoding('utf8')) {
+    body += chunk;
+    if (body.length > MAX_BODY) return undefined;
+  }
+  try {
+    return JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+}
+
+// Starts the turn in the background; the pending entry is already set.
+function startTurn(deps, chat, message) {
+  runTurn(deps, chat, message).catch((err) => console.error(err));
+}
 
 // API routes: { method, path (string, or RegExp with named groups), handler(ctx) }
 // where ctx = { req, res, params, deps }. Later issues append entries here.
@@ -79,6 +103,69 @@ export const routes = [
       if (!(await deps.chatStore.remove(chat.id))) return sendError(res, 404, 'chat not found');
       res.writeHead(204);
       res.end();
+    },
+  },
+  {
+    method: 'POST',
+    path: '/api/messages',
+    handler: async ({ req, res, deps }) => {
+      const body = await readJson(req);
+      const text = body?.text;
+      if (typeof text !== 'string' || !text.trim()) return sendError(res, 400, 'text is required');
+      const chatId = body.chatId;
+      if (chatId != null && typeof chatId !== 'string') return sendError(res, 400, 'chatId must be a string');
+      if (!requireModelReady(res, deps.modelManager)) return;
+      const pending = pendingOf(deps);
+      let chat;
+      if (chatId != null) {
+        chat = await deps.chatStore.get(chatId);
+        if (!chat) return sendError(res, 404, 'chat not found');
+        if (pending.get(chat.id) != null) return sendError(res, 409, 'a reply is pending in this chat');
+        if (chat.messages.at(-1)?.error) return sendError(res, 409, 'the last message failed; retry or delete the chat');
+      } else {
+        chat = await deps.chatStore.create(text);
+      }
+      // Claim the chat before any await so concurrent sends and deletes see it.
+      pending.set(chat.id, 'translating');
+      const message = {
+        id: newId(), role: 'user', original: text, english: null, lang: null,
+        createdAt: new Date().toISOString(),
+      };
+      chat.messages.push(message);
+      try {
+        await deps.chatStore.save(chat);
+      } catch (err) {
+        pending.clear(chat.id);
+        throw err;
+      }
+      sendJson(res, 202, { chatId: chat.id, messageId: message.id });
+      startTurn(deps, chat, message);
+    },
+  },
+  {
+    method: 'POST',
+    path: RETRY_PATH,
+    handler: async ({ res, params, deps }) => {
+      if (!requireModelReady(res, deps.modelManager)) return;
+      const pending = pendingOf(deps);
+      const chat = await deps.chatStore.get(params.id);
+      if (!chat) return sendError(res, 404, 'chat not found');
+      const message = chat.messages.find((m) => m.id === params.messageId);
+      if (!message) return sendError(res, 404, 'message not found');
+      if (pending.get(chat.id) != null) return sendError(res, 409, 'a reply is pending in this chat');
+      if (chat.messages.at(-1) !== message || message.role !== 'user' || !message.error) {
+        return sendError(res, 409, 'only the last failed user message can be retried');
+      }
+      pending.set(chat.id, 'translating');
+      delete message.error;
+      try {
+        await deps.chatStore.save(chat);
+      } catch (err) {
+        pending.clear(chat.id);
+        throw err;
+      }
+      sendJson(res, 202, { chatId: chat.id, messageId: message.id });
+      startTurn(deps, chat, message);
     },
   },
 ];
@@ -131,8 +218,10 @@ async function serveStatic(req, res, publicDir, pathname) {
   }
 }
 
-// deps: { modelManager, publicDir, chatStore, pending?, ...more added by later issues }.
-export function createApp(deps) {
+// deps: { modelManager, publicDir, chatStore, runner?, detect?, pending?, maxChars? }.
+export function createApp(options) {
+  const deps = { detect: detectLanguage, ...options };
+  deps.pending ??= createPending();
   return http.createServer(async (req, res) => {
     try {
       const { pathname } = new URL(req.url, 'http://127.0.0.1');

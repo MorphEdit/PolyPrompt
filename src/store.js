@@ -16,6 +16,20 @@ export function makeTitle(text) {
   return chars.length > TITLE_MAX ? chars.slice(0, TITLE_MAX).join('') + '…' : flat;
 }
 
+// Windows refuses to replace a file another handle is reading (EPERM/EACCES/
+// EBUSY), e.g. while the page polls the chat; such renames are retried briefly.
+const BUSY = new Set(['EPERM', 'EACCES', 'EBUSY']);
+async function renameRetry(from, to, tries = 20) {
+  for (let i = 1; ; i++) {
+    try {
+      return await rename(from, to);
+    } catch (err) {
+      if (i >= tries || !BUSY.has(err.code)) throw err;
+      await new Promise((r) => setTimeout(r, 5 * i));
+    }
+  }
+}
+
 const isChat = (c) => c !== null && typeof c === 'object'
   && typeof c.id === 'string' && Array.isArray(c.messages);
 
@@ -60,7 +74,7 @@ export function createChatStore({ dir = 'data/chats', now = () => new Date() } =
     const tmp = path.join(dir, `.${chat.id}.${process.pid}.${randomUUID()}.tmp`);
     await writeFile(tmp, JSON.stringify(chat, null, 2));
     try {
-      await rename(tmp, file(chat.id));
+      await renameRetry(tmp, file(chat.id));
     } catch (err) {
       await rm(tmp, { force: true });
       throw err;
