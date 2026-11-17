@@ -6,7 +6,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ClaudeError } from '../src/claude.js';
 import { createModelManager } from '../src/model.js';
-import { TRANSLATE_FAILED, UNSUPPORTED_NOTE, createPending } from '../src/pipeline.js';
+import {
+  ANSWER_NOT_TRANSLATED_NOTE, NOT_TRANSLATED_NOTE, TRANSLATE_FAILED, UNSUPPORTED_NOTE, createPending,
+} from '../src/pipeline.js';
+import { NotTranslatedError } from '../src/translator.js';
 import { createApp } from '../src/server.js';
 import { createChatStore } from '../src/store.js';
 import { deferred, fakeLoader, listen, tick } from './helpers.js';
@@ -441,4 +444,36 @@ test('unsupported language: sent as typed, English answer with a Thai note, chat
   assert.equal(a.original, a.english);
   assert.equal(a.note, UNSUPPORTED_NOTE);
   assert.equal(chat.lang, 'th');
+});
+
+test('a rejected forward translation sends the text as typed with a note (#36)', async (t) => {
+  const { api, translator, runner } = await setup(t, { table: THAI });
+  const answer = translator.translate.bind(translator);
+  translator.translate = async (text, src, tgt) => {
+    if (tgt === 'en') { translator.calls.push([text, src, tgt]); throw new NotTranslatedError(); }
+    return answer(text, src, tgt);
+  };
+  const { chat } = await api.turn({ text: 'สวัสดี' });
+  assert.equal(runner.calls[0].prompt, 'สวัสดี');
+  const [u, a] = chat.messages;
+  assert.equal(u.error, undefined);
+  assert.equal(u.english, 'สวัสดี');
+  assert.equal(a.original, '<th>Answer to: สวัสดี');
+  assert.equal(a.note, NOT_TRANSLATED_NOTE);
+  assert.equal(chat.lang, 'th');
+});
+
+test('a rejected back translation shows the English answer with a note (#36)', async (t) => {
+  const { api, translator } = await setup(t, { table: THAI });
+  const answer = translator.translate.bind(translator);
+  translator.translate = async (text, src, tgt) => {
+    if (tgt === 'th') { translator.calls.push([text, src, tgt]); throw new NotTranslatedError(); }
+    return answer(text, src, tgt);
+  };
+  const { chat } = await api.turn({ text: 'สวัสดี' });
+  const [u, a] = chat.messages;
+  assert.equal(u.error, undefined);
+  assert.equal(a.original, 'Answer to: <en>สวัสดี');
+  assert.equal(a.english, a.original);
+  assert.equal(a.note, ANSWER_NOT_TRANSLATED_NOTE);
 });

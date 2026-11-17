@@ -37,6 +37,9 @@ Language detection uses the offline [`eld`](https://github.com/nitotm/efficient-
 library. The 47 detected languages TranslateGemma supports are listed in `src/lang.js`; the others
 (for example Amharic or Lao) get Claude's answer in English with a note.
 Texts with fewer than 3 letters (e.g. "ok", "555") count as "unsure".
+If the translation model answers a message instead of translating it (seen on the CPU), the
+translation is retried once; if it fails again, Claude gets the message as typed, or the answer
+is shown in English, each with a note.
 
 ## Choosing the models
 

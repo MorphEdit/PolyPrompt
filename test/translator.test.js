@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildPrompt, cleanOutput, createTranslator, downloadModel, isDownloaded, loadTranslateGemma,
-  modelFileName, modelUri,
+  maxTokensFor, modelFileName, modelUri,
 } from '../src/translator.js';
 import { createModelManager } from '../src/model.js';
 
@@ -162,6 +162,7 @@ test('loader downloads a missing size with progress, then translates greedily wi
   const [gen] = log.generations;
   assert.deepEqual(gen.history, [{ type: 'user', text: TH_EN }, { type: 'model', response: [] }]);
   assert.equal(gen.options.temperature, 0);
+  assert.equal(gen.options.maxTokens, maxTokensFor('สวัสดี'));
   assert.equal(gen.wrapper.gemma, true);
 
   await translator.dispose();
