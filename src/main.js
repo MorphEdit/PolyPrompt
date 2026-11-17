@@ -4,18 +4,29 @@ import { createModelManager, placeholderLoad } from './model.js';
 import { createApp } from './server.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const HOST = '127.0.0.1';
-const PORT = Number(process.env.PORT ?? 3210);
+export const HOST = '127.0.0.1';
 
-// Swap placeholderLoad for the real transformers.js loader here.
-const modelManager = createModelManager({ load: placeholderLoad });
+// Builds deps and listens on HOST; resolves to the listening server.
+export function start({ port = Number(process.env.PORT ?? 3210), load = placeholderLoad } = {}) {
+  // Swap placeholderLoad for the real transformers.js loader here.
+  const modelManager = createModelManager({ load });
 
-const app = createApp({
-  modelManager,
-  publicDir: path.join(root, 'public'),
-});
+  const app = createApp({
+    modelManager,
+    publicDir: path.join(root, 'public'),
+  });
 
-app.listen(PORT, HOST, () => {
-  console.log(`http://${HOST}:${app.address().port}`);
-  modelManager.start();
-});
+  return new Promise((resolve, reject) => {
+    app.once('error', reject);
+    app.listen(port, HOST, () => {
+      const { address, port } = app.address();
+      console.log(`http://${address}:${port}`);
+      modelManager.start();
+      resolve(app);
+    });
+  });
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  start();
+}

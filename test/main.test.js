@@ -7,7 +7,7 @@ import { request } from './helpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-test('entry point prints the 127.0.0.1 URL and serves before the model is ready', async (t) => {
+test('entry point prints the 127.0.0.1 URL and serves before the model is ready', { timeout: 10000 }, async (t) => {
   const child = spawn(process.execPath, [path.join(root, 'src', 'main.js')], {
     env: { ...process.env, PORT: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -26,4 +26,11 @@ test('entry point prints the 127.0.0.1 URL and serves before the model is ready'
   assert.equal((await request(port, 'GET', '/')).status, 200);
   const { model } = (await request(port, 'GET', '/api/status')).json;
   assert.ok(['loading', 'error'].includes(model.state));
+});
+
+test('start() listens on 127.0.0.1 only', async (t) => {
+  const { start } = await import('../src/main.js');
+  const server = await start({ port: 0, load: () => new Promise(() => {}) });
+  t.after(() => server.close());
+  assert.equal(server.address().address, '127.0.0.1');
 });
