@@ -43,24 +43,25 @@ test('success resolves text and sessionId from the JSON output', async () => {
   assert.deepEqual(res, { text: 'hi', sessionId: 's2' });
 });
 
-test('prompt arrives on stdin unchanged and is not in argv', async () => {
+test('prompt arrives on stdin unchanged (as a stream-json user line) and is not in argv', async () => {
   const log = logFile();
   const prompt = '"; rm -rf / $(x) `y` & | > %PATH% ^ สวัสดี\nline2';
   await createClaudeRunner({ command: fx('ok.mjs') }).run({ prompt });
   const { argv, stdin } = JSON.parse(readFileSync(log, 'utf8'));
-  assert.equal(stdin, prompt);
+  assert.deepEqual(JSON.parse(stdin), { type: 'user', message: { role: 'user', content: prompt } });
   assert.ok(!argv.some((a) => a.includes('rm -rf') || a.includes('$(x)')));
 });
 
-test('argv: -p, JSON output, tools disabled, resume only with sessionId', async () => {
+test('argv: -p, stream-json in and out, web tools only, resume only with sessionId', async () => {
   const runner = createClaudeRunner({ command: fx('ok.mjs') });
   let log = logFile();
   await runner.run({ prompt: 'a' });
   let { argv } = JSON.parse(readFileSync(log, 'utf8'));
   assert.deepEqual(argv, buildArgs());
   assert.ok(argv.includes('-p'));
-  assert.equal(argv[argv.indexOf('--output-format') + 1], 'json');
-  assert.equal(argv[argv.indexOf('--tools') + 1], '');
+  assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json');
+  assert.equal(argv[argv.indexOf('--input-format') + 1], 'stream-json');
+  assert.equal(argv[argv.indexOf('--tools') + 1], 'WebSearch,WebFetch');
   assert.ok(!argv.includes('--resume') && !argv.includes('-r'));
 
   log = logFile();
@@ -109,7 +110,7 @@ test('Windows: npm-style .cmd shim runs its node script with prompt on stdin', {
   const res = await createClaudeRunner({ command: fx('ok-npm.cmd') }).run({ prompt, sessionId: 's1' });
   assert.deepEqual(res, { text: 'hi', sessionId: 's2' });
   const { argv, stdin } = JSON.parse(readFileSync(log, 'utf8'));
-  assert.equal(stdin, prompt);
+  assert.deepEqual(JSON.parse(stdin), { type: 'user', message: { role: 'user', content: prompt } });
   assert.deepEqual(argv, buildArgs('s1'));
 });
 
@@ -119,7 +120,7 @@ test('Windows: other .cmd shim runs via cmd.exe with prompt on stdin', { skip: !
   const res = await createClaudeRunner({ command: fx('ok-plain.cmd') }).run({ prompt, sessionId: 's1' });
   assert.deepEqual(res, { text: 'hi', sessionId: 's2' });
   const { argv, stdin } = JSON.parse(readFileSync(log, 'utf8'));
-  assert.equal(stdin, prompt);
+  assert.deepEqual(JSON.parse(stdin), { type: 'user', message: { role: 'user', content: prompt } });
   assert.deepEqual(argv, buildArgs('s1'));
 });
 

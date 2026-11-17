@@ -28,7 +28,7 @@ function logFile() {
 
 const readLog = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
-test('#23: claude runs outside any git repo with a general-assistant system prompt', async () => {
+test('#23/#35: claude runs outside any git repo with a general-assistant system prompt and web tools only', async () => {
   const log = logFile();
   await createClaudeRunner({ command: fx('ok.mjs') }).run({ prompt: 'สวัสดี' });
   const { argv, cwd } = readLog(log);
@@ -36,7 +36,7 @@ test('#23: claude runs outside any git repo with a general-assistant system prom
   assert.equal(path.resolve(cwd), path.resolve(defaultClaudeHome()));
   assert.equal(insideGitRepo(cwd), false, `claude was spawned inside a git repo: ${cwd}`);
   assert.equal(argv[argv.indexOf('--system-prompt') + 1], SYSTEM_PROMPT);
-  assert.equal(argv[argv.indexOf('--tools') + 1], '');
+  assert.equal(argv[argv.indexOf('--tools') + 1], 'WebSearch,WebFetch');
   assert.ok(argv.includes('--strict-mcp-config'));
   assert.equal(argv[argv.indexOf('--setting-sources') + 1], 'user');
 });
@@ -96,7 +96,7 @@ test('--model is passed only when the setting is not "default"; resume, tools, M
       assert.equal(argv[argv.indexOf('--model') + 1], model);
       assert.equal(argv.filter((a) => a === '--model').length, 1);
       assert.equal(argv[argv.indexOf('--resume') + 1], 's1');
-      assert.equal(argv[argv.indexOf('--tools') + 1], '');
+      assert.equal(argv[argv.indexOf('--tools') + 1], 'WebSearch,WebFetch');
       assert.ok(argv.includes('--strict-mcp-config'));
       assert.equal(argv[argv.indexOf('--system-prompt') + 1], SYSTEM_PROMPT);
       assert.equal(path.resolve(cwd), path.resolve(home));

@@ -12,8 +12,14 @@
     <button id="new-chat" class="new-chat" type="button">+ แชทใหม่</button>
     <div class="sidebar-label">แชทที่บันทึกไว้</div>
     <ul id="chat-list" class="chat-list"></ul>
+    <div id="old-sessions-label" class="sidebar-label" hidden>แชตเก่าจาก Claude Code</div>
+    <ul id="old-sessions" class="chat-list old-sessions" hidden></ul>
   </aside>
   <main class="main">
+    <header class="chat-header">
+      <span id="folder-label" class="folder-label"></span>
+      <button id="folder-button" class="folder-button" type="button" hidden>📁 เลือกโฟลเดอร์</button>
+    </header>
     <div id="model-banner" class="banner" hidden></div>
     <div id="switch-banner" class="banner" hidden></div>
     <div id="error-banner" class="banner banner-error" hidden></div>
@@ -25,9 +31,22 @@
         <button id="picker" class="picker-button" type="button" aria-haspopup="true" aria-expanded="false"></button>
         <div id="picker-menu" class="picker-menu" hidden></div>
       </div>
+      <button id="stop" class="stop-button" type="button" hidden>หยุด</button>
       <button id="send" type="submit" disabled>ส่ง</button>
     </form>
   </main>
+  <div id="folder-dialog" class="dialog-backdrop" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="folder-title">
+      <div id="folder-title" class="dialog-title">เลือกโฟลเดอร์งาน</div>
+      <div id="folder-path" class="folder-path"></div>
+      <div id="folder-error" class="picker-error" hidden></div>
+      <ul id="folder-list" class="folder-list"></ul>
+      <div class="dialog-actions">
+        <button id="folder-cancel" type="button">ยกเลิก</button>
+        <button id="folder-choose" class="primary" type="button">เลือกโฟลเดอร์นี้</button>
+      </div>
+    </div>
+  </div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

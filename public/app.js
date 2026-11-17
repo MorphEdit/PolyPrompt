@@ -2,6 +2,8 @@ import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
   retryEnabled, lastMessageHasError, renderMarkdown, SIZE_OPTIONS, CLAUDE_OPTIONS, formatGB,
   pickerLabel, pickerDisabled, answeredByLabel, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
+  STOPPED_NOTE, TRUNCATED_NOTE, DECISION_LABELS, canStop, currentFolder, canPickFolder, sendBody,
+  sessionProgress, shortDate,
 } from './logic.js';
 
 const POLL_MS = 1000;
@@ -20,6 +22,17 @@ const els = {
   composer: $('composer'),
   input: $('input'),
   send: $('send'),
+  stop: $('stop'),
+  folderLabel: $('folder-label'),
+  folderButton: $('folder-button'),
+  oldSessionsLabel: $('old-sessions-label'),
+  oldSessions: $('old-sessions'),
+  folderDialog: $('folder-dialog'),
+  folderPath: $('folder-path'),
+  folderError: $('folder-error'),
+  folderList: $('folder-list'),
+  folderCancel: $('folder-cancel'),
+  folderChoose: $('folder-choose'),
 };
 
 const state = {
@@ -30,15 +43,22 @@ const state = {
   chats: [],
   chat: null, // the open chat (with pendingStep), or null for a new chat
   busy: false, // a send/retry request is in flight
+  pendingFolder: null, // folder picked for the new chat; sent with its first message
+  session: null, // an opened old Claude Code session { id, folder, messages, done, total, note? }
+  oldSessions: [], // old Claude Code sessions of the current folder
+  oldSessionsFolder: null, // the folder oldSessions belong to
+  folderView: null, // what the folder picker shows: { path, parent, home, folders }
+  answering: false, // a permission answer or stop is in flight
 };
 
 let chatPollTimer = null;
+let sessionPollTimer = null;
 let retryButton = null; // the "ส่งใหม่" button of the open chat, if any
 let statusPollTimer = null;
 
 class ApiError extends Error {
-  constructor(status) {
-    super(apiErrorMessage(status));
+  constructor(status, serverMessage) {
+    super(apiErrorMessage(status, serverMessage));
     this.status = status;
   }
 }
@@ -54,7 +74,13 @@ async function api(method, url, body) {
   } catch {
     throw new ApiError(0);
   }
-  if (!res.ok) throw new ApiError(res.status);
+  if (!res.ok) {
+    let message;
+    try {
+      message = (await res.json())?.error;
+    } catch {}
+    throw new ApiError(res.status, message);
+  }
   return res.status === 204 ? null : res.json();
 }
 
@@ -76,8 +102,10 @@ function updateComposer() {
   // so the retry button's state is kept in sync here too.
   if (retryButton) retryButton.disabled = !retryEnabled({ pending: isPending(), modelState: state.model.state });
   renderPicker();
+  els.stop.hidden = !canStop(state.chat);
+  els.stop.disabled = state.answering;
   const step = state.chat?.pendingStep;
-  const label = step != null ? stepLabel(step) : state.busy ? 'กำลังส่ง…' : '';
+  const label = step != null ? stepLabel(step) : state.busy ? 'กำลังส่ง…' : sessionProgress(state.session ?? {});
   els.statusLine.textContent = label;
   els.statusLine.hidden = !label;
 }
@@ -360,15 +388,18 @@ function renderMessage(m, index, messages) {
   } else {
     // renderMarkdown escapes all HTML in Claude's (untrusted) text.
     bubble.innerHTML = renderMarkdown(m.original);
+    bubble.hidden = !m.original;
     if (m.english && m.english !== m.original) {
       const body = document.createElement('div');
       body.innerHTML = renderMarkdown(m.english);
       wrap.append(translationBlock('ดูต้นฉบับภาษาอังกฤษ', body));
     }
-    if (m.note) {
+    if (m.activity?.length) wrap.append(activityBlock(m.activity, false));
+    for (const text of [m.note, m.stopped ? STOPPED_NOTE : null]) {
+      if (!text) continue;
       const note = document.createElement('div');
       note.className = 'note';
-      note.textContent = m.note;
+      note.textContent = text;
       wrap.append(note);
     }
     const by = answeredByLabel(m);
@@ -382,20 +413,111 @@ function renderMessage(m, index, messages) {
   return wrap;
 }
 
+// Activity lines: fixed Thai text, with the raw English detail and the tool
+// output (collapsed) inside. Nothing here is translated.
+function activityBlock(lines, open) {
+  const box = document.createElement('details');
+  box.className = 'activity';
+  box.open = open;
+  const summary = document.createElement('summary');
+  summary.textContent = `กิจกรรมของ Claude (${lines.length})`;
+  box.append(summary);
+  for (const line of lines) {
+    const item = document.createElement('details');
+    item.className = 'activity-line';
+    const head = document.createElement('summary');
+    head.textContent = line.text;
+    const detail = document.createElement('pre');
+    detail.textContent = line.detail ?? '';
+    item.append(head, detail);
+    if (line.output) {
+      const output = document.createElement('details');
+      output.className = 'activity-output';
+      const label = document.createElement('summary');
+      label.textContent = 'ผลลัพธ์';
+      const body = document.createElement('pre');
+      body.textContent = line.output;
+      output.append(label, body);
+      if (line.truncated) {
+        const note = document.createElement('div');
+        note.className = 'note';
+        note.textContent = TRUNCATED_NOTE;
+        output.append(note);
+      }
+      item.append(output);
+    }
+    box.append(item);
+  }
+  return box;
+}
+
+// The open permission card: Thai text, the exact English action, three buttons.
+function cardBlock(card) {
+  const box = document.createElement('div');
+  box.className = 'permission-card';
+  const text = document.createElement('div');
+  text.className = 'permission-text';
+  text.textContent = card.text;
+  const detail = document.createElement('pre');
+  detail.className = 'permission-detail';
+  detail.textContent = card.detail;
+  const actions = document.createElement('div');
+  actions.className = 'permission-actions';
+  for (const { decision, label } of DECISION_LABELS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `permission-${decision}`;
+    b.textContent = label;
+    b.disabled = state.answering;
+    b.addEventListener('click', () => answerCard(card, decision));
+    actions.append(b);
+  }
+  box.append(text, detail, actions);
+  return box;
+}
+
+function liveBlock(live) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg assistant live';
+  if (live.activity.length) wrap.append(activityBlock(live.activity, true));
+  if (live.card) wrap.append(cardBlock(live.card));
+  return wrap;
+}
+
+function renderHeader() {
+  const folder = currentFolder(state);
+  els.folderLabel.textContent = folder ? `📁 ${folder}` : '';
+  els.folderLabel.title = folder ?? '';
+  els.folderButton.hidden = !canPickFolder(state);
+  els.folderButton.textContent = folder ? '📁 เปลี่ยนโฟลเดอร์' : '📁 เลือกโฟลเดอร์';
+}
+
 function renderChat() {
   const atBottom = els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight < 40;
-  const messages = state.chat?.messages ?? [];
+  // An old session shows its English text until its translation arrives.
+  const messages = state.session
+    ? state.session.messages.map((m) => ({ ...m, original: m.original ?? m.english }))
+    : state.chat?.messages ?? [];
   retryButton = null;
-  if (messages.length === 0) {
+  const items = messages.map(renderMessage);
+  if (state.session?.note) {
+    const note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = state.session.note;
+    items.unshift(note);
+  }
+  if (state.chat?.live) items.push(liveBlock(state.chat.live));
+  if (items.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty';
     empty.textContent = 'วันนี้ให้ช่วยอะไรดี?';
-    els.messages.replaceChildren(empty);
-  } else {
-    els.messages.replaceChildren(...messages.map(renderMessage));
+    items.push(empty);
   }
+  els.messages.replaceChildren(...items);
   if (atBottom) els.messages.scrollTop = els.messages.scrollHeight;
+  renderHeader();
   renderChatList();
+  loadOldSessions();
   updateComposer();
 }
 
@@ -423,8 +545,14 @@ async function refreshChat(id) {
   if (state.chat?.id === id) schedulePoll();
 }
 
+function closeSession() {
+  clearTimeout(sessionPollTimer);
+  state.session = null;
+}
+
 async function openChat(id) {
   clearTimeout(chatPollTimer);
+  closeSession();
   showError(null);
   try {
     state.chat = await api('GET', `/api/chats/${encodeURIComponent(id)}`);
@@ -440,7 +568,9 @@ async function openChat(id) {
 
 function newChat() {
   clearTimeout(chatPollTimer);
+  closeSession();
   state.chat = null;
+  state.pendingFolder = null;
   showError(null);
   renderChat();
   els.input.focus();
@@ -450,16 +580,22 @@ async function send() {
   updateComposer();
   if (els.send.disabled) return;
   const text = els.input.value;
-  const chatId = state.chat?.id;
+  const body = sendBody({ text, chat: state.chat, session: state.session, pendingFolder: state.pendingFolder });
   state.busy = true;
   updateComposer();
   try {
-    const res = await api('POST', '/api/messages', chatId ? { chatId, text } : { text });
+    const res = await api('POST', '/api/messages', body);
     els.input.value = '';
     showError(null);
-    state.chat = state.chat ?? { id: res.chatId, messages: [], pendingStep: null };
+    if (!state.chat) {
+      closeSession();
+      state.pendingFolder = null;
+      state.chat = { id: res.chatId, messages: [], pendingStep: null };
+    }
     await refreshChat(res.chatId);
     loadChats();
+    // A continued old session leaves the list.
+    if (body.resumeSessionId) loadOldSessions(true);
   } catch (err) {
     showError(err);
     if (err.status === 503) loadStatus();
@@ -467,6 +603,177 @@ async function send() {
     state.busy = false;
     updateComposer();
     autoGrow();
+  }
+}
+
+// ---- permission cards and stop ----
+
+async function answerCard(card, decision) {
+  const id = state.chat?.id;
+  if (!id || state.answering) return;
+  state.answering = true;
+  renderChat();
+  try {
+    await api('POST', `/api/chats/${encodeURIComponent(id)}/permissions/${encodeURIComponent(card.requestId)}`,
+      { token: card.token, decision });
+    showError(null);
+  } catch (err) {
+    showError(err);
+  } finally {
+    state.answering = false;
+  }
+  if (state.chat?.id === id) await refreshChat(id);
+}
+
+async function stopTurn() {
+  const id = state.chat?.id;
+  if (!id || !canStop(state.chat) || state.answering) return;
+  state.answering = true;
+  updateComposer();
+  try {
+    await api('POST', `/api/chats/${encodeURIComponent(id)}/stop`);
+    showError(null);
+  } catch (err) {
+    showError(err);
+  } finally {
+    state.answering = false;
+  }
+  if (state.chat?.id === id) await refreshChat(id);
+}
+
+// ---- work folder picker ----
+
+function renderFolderPicker() {
+  const view = state.folderView;
+  els.folderDialog.hidden = !view;
+  if (!view) return;
+  els.folderPath.textContent = view.path ?? 'เลือกไดรฟ์';
+  els.folderChoose.disabled = !view.path;
+  const items = [];
+  if (view.path) {
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'folder-item folder-up';
+    up.textContent = '⬆ ขึ้นไปหนึ่งระดับ';
+    up.addEventListener('click', () => browseFolder(view.parent));
+    const li = document.createElement('li');
+    li.append(up);
+    items.push(li);
+  }
+  for (const f of view.folders) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'folder-item';
+    b.textContent = `📁 ${f.name}`;
+    b.title = f.path;
+    b.addEventListener('click', () => browseFolder(f.path));
+    const li = document.createElement('li');
+    li.append(b);
+    items.push(li);
+  }
+  els.folderList.replaceChildren(...items);
+}
+
+function showFolderError(message) {
+  els.folderError.textContent = message ?? '';
+  els.folderError.hidden = !message;
+}
+
+// path null shows the roots (drives on Windows).
+async function browseFolder(path) {
+  try {
+    const query = path ? `?path=${encodeURIComponent(path)}` : '';
+    state.folderView = await api('GET', `/api/folders${query}`);
+    showFolderError(null);
+  } catch (err) {
+    showFolderError(err.message);
+  }
+  renderFolderPicker();
+}
+
+async function openFolderPicker() {
+  if (!canPickFolder(state)) return;
+  state.folderView = { path: null, parent: null, folders: [] };
+  renderFolderPicker();
+  // Start at the chosen folder, or the home folder (from the roots answer).
+  let start = state.pendingFolder;
+  if (!start) {
+    try {
+      start = (await api('GET', '/api/folders')).home;
+    } catch {}
+  }
+  await browseFolder(start ?? null);
+}
+
+function closeFolderPicker() {
+  state.folderView = null;
+  showFolderError(null);
+  renderFolderPicker();
+}
+
+function chooseFolder() {
+  const path = state.folderView?.path;
+  if (!path) return;
+  state.pendingFolder = path;
+  closeFolderPicker();
+  renderChat();
+}
+
+// ---- old Claude Code sessions of the current folder ----
+
+function renderOldSessions() {
+  const folder = currentFolder(state);
+  els.oldSessionsLabel.hidden = !folder;
+  els.oldSessions.hidden = !folder;
+  els.oldSessions.replaceChildren(...(folder ? state.oldSessions : []).map((s) => {
+    const li = document.createElement('li');
+    li.className = 'chat-item';
+    li.classList.toggle('active', s.id === state.session?.id);
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'chat-title';
+    open.textContent = `${s.title} · ${shortDate(s.updatedAt)}`;
+    open.title = s.title;
+    open.addEventListener('click', () => openSession(folder, s.id));
+    li.append(open);
+    return li;
+  }));
+}
+
+async function loadOldSessions(force = false) {
+  const folder = currentFolder(state);
+  if (!force && folder === state.oldSessionsFolder) return renderOldSessions();
+  state.oldSessionsFolder = folder;
+  state.oldSessions = [];
+  renderOldSessions();
+  if (!folder) return;
+  try {
+    const list = await api('GET', `/api/claude-sessions?folder=${encodeURIComponent(folder)}`);
+    if (state.oldSessionsFolder === folder) state.oldSessions = list;
+  } catch (err) {
+    showError(err);
+  }
+  renderOldSessions();
+}
+
+async function openSession(folder, id) {
+  clearTimeout(chatPollTimer);
+  clearTimeout(sessionPollTimer);
+  showError(null);
+  try {
+    const session = await api('GET', `/api/claude-sessions/${encodeURIComponent(id)}?folder=${encodeURIComponent(folder)}`);
+    const first = state.session?.id !== id;
+    state.chat = null;
+    state.pendingFolder = folder;
+    state.session = session;
+    if (first) els.messages.scrollTop = 0;
+    renderChat();
+    if (first) els.messages.scrollTop = els.messages.scrollHeight;
+    // Poll until every message is translated.
+    if (session.done < session.total) sessionPollTimer = setTimeout(() => openSession(folder, id), POLL_MS);
+  } catch (err) {
+    showError(err);
+    if (err.status === 404) loadOldSessions(true);
   }
 }
 
@@ -495,6 +802,10 @@ function autoGrow() {
 
 els.newChat.addEventListener('click', newChat);
 els.picker.addEventListener('click', togglePicker);
+els.stop.addEventListener('click', stopTurn);
+els.folderButton.addEventListener('click', openFolderPicker);
+els.folderCancel.addEventListener('click', closeFolderPicker);
+els.folderChoose.addEventListener('click', chooseFolder);
 els.composer.addEventListener('submit', (e) => {
   e.preventDefault();
   send();

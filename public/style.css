@@ -376,3 +376,134 @@ details.translation .translation-body {
 .picker-name { font-size: 14px; }
 .picker-hint { display: block; font-size: 12px; color: var(--muted); }
 .picker-error { padding: 4px 10px; font-size: 12px; color: var(--error); }
+
+/* ---- work folder, old sessions, live activity, permission cards ---- */
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+}
+
+.folder-label {
+  flex: 1;
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.folder-button[hidden], .stop-button[hidden], .sidebar-label[hidden], .old-sessions[hidden] { display: none; }
+
+.old-sessions { flex: 0 1 auto; max-height: 40%; }
+
+.composer .stop-button { background: #fff; color: var(--error); border: 1px solid var(--error); }
+.composer .stop-button:hover:not(:disabled) { background: var(--error-bg); }
+
+details.activity {
+  margin-top: 6px;
+  max-width: 80%;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+details.activity summary { cursor: pointer; }
+.activity-line { margin: 4px 0 0 12px; }
+.activity-line > summary { color: var(--text); }
+.activity-output { margin-left: 12px; }
+
+details.activity pre, .permission-detail {
+  margin: 4px 0;
+  padding: 8px;
+  background: #f5f3ec;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.permission-card {
+  margin-top: 8px;
+  max-width: 80%;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: #fff;
+  padding: 12px 14px;
+}
+
+.permission-text { font-weight: 600; margin-bottom: 6px; }
+.permission-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+.permission-actions button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+
+.permission-actions .permission-allow { background: var(--accent); border-color: var(--accent); color: #fff; }
+.permission-actions .permission-deny { color: var(--error); }
+.permission-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-backdrop[hidden] { display: none; }
+
+.dialog {
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 16px;
+  gap: 8px;
+}
+
+.dialog-title { font-weight: 600; }
+.folder-path { font-size: 13px; color: var(--muted); word-break: break-all; }
+.folder-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 120px; }
+
+.folder-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.folder-item:hover { background: var(--sidebar); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.dialog-actions button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+
+.dialog-actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dialog-actions .primary:disabled { background: #d9d6cc; border-color: #d9d6cc; cursor: not-allowed; }
+.picker-error[hidden] { display: none; }
+.bubble[hidden] { display: none; }

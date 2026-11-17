@@ -1,12 +1,14 @@
-// Claude Code CLI runner: sends one prompt (on stdin) to `claude -p` and
-// returns the answer text and session id. Kept small so the provider can be
-// swapped later.
+// Claude Code CLI runner: sends one prompt (on stdin, stream-json) to
+// `claude -p`, streams its activity and permission requests, and returns the
+// answer text and session id. The protocol itself lives in stream.js.
 
 import { spawn, execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { CLAUDE_OPTIONS } from '../public/models.js';
+import { activityLine, truncateOutput } from './activity.js';
+import { parseLine, permissionResponseLine, readEvent, unsupportedResponseLine, userLine } from './stream.js';
 
 const INSTALL_LOGIN_HINT = 'ติดตั้ง Claude Code แล้วเปิดเทอร์มินัล พิมพ์ `claude` และ `/login` เพื่อเข้าสู่ระบบ';
 const MESSAGES = {
@@ -15,6 +17,7 @@ const MESSAGES = {
   timeout: 'Claude ไม่ตอบภายในเวลาที่กำหนด กรุณาลองส่งใหม่',
   failed: 'เรียก Claude ไม่สำเร็จ',
   model_rejected: 'Claude ไม่รับโมเดลที่เลือก (อาจไม่มีโมเดลนี้ หรือบัญชีนี้ใช้ไม่ได้) จึงกลับไปใช้โมเดลก่อนหน้า กรุณาลองส่งใหม่',
+  folder_missing: 'ไม่พบโฟลเดอร์ของแชตนี้ (อาจถูกลบหรือย้าย) จึงส่งต่อไม่ได้ กรุณาเริ่มแชตใหม่',
 };
 const AUTH = /log ?in|auth/i;
 // `claude -p --model <unknown>` answers is_error with api_error_status 404
@@ -22,14 +25,16 @@ const AUTH = /log ?in|auth/i;
 const MODEL_REJECTED = /selected model|unrecognized_model/i;
 const NODE_SCRIPT = /\.[cm]?js$/i;
 // Args reaching cmd.exe (fallback for unparsable .cmd shims) are only our
-// fixed flags, SYSTEM_PROMPT and the session id; anything else is refused.
-const CMD_SAFE_ARG = /^[\w.:\/=-]*$/;
+// fixed flags, the comma-separated tool lists, SYSTEM_PROMPT and the session
+// id; anything else is refused.
+const CMD_SAFE_ARG = /^[\w.:\/=,-]*$/;
 
 // Replaces Claude Code's coding-agent prompt. A fixed constant with no
 // cmd.exe metacharacters, so the .cmd fallback may pass it quoted.
 export const SYSTEM_PROMPT = 'You are Claude, a helpful general assistant in a chat. '
-  + 'You have no access to files, folders, tools or the computer you run on. '
-  + 'Answer from your own knowledge and what the user writes in the chat.';
+  + 'You can search the web and fetch web pages. '
+  + 'You have no access to files, folders, commands or the computer you run on. '
+  + 'Answer from your own knowledge, the web and what the user writes in the chat.';
 
 // Working directory for every `claude` run: owned by the app and outside the
 // PolyPrompt repo, so Claude Code sees no git state or CLAUDE.md and keeps
@@ -49,15 +54,31 @@ export class ClaudeError extends Error {
 // anything else) adds no --model flag, so Claude Code uses its own default.
 export const MODEL_FLAGS = CLAUDE_OPTIONS.map((o) => o.value).filter((v) => v !== 'default');
 
-export function buildArgs(sessionId, model = 'default') {
-  // `--tools ""` is the strictest option in `claude --help`: it removes every
-  // built-in tool, unlike --disallowedTools which only blocks listed names.
-  // --strict-mcp-config without --mcp-config also loads no MCP server tools.
-  // --setting-sources user skips project/local settings; auth is user-level.
+// Tools a chat without a folder gets: the web only.
+export const WEB_TOOLS = 'WebSearch,WebFetch';
+// Tools a folder chat runs without a permission card: reading and the web.
+export const FOLDER_ALLOWED_TOOLS = 'Read,Glob,Grep,LS,NotebookRead,WebSearch,WebFetch';
+
+// Never bypassPermissions: every other tool call reaches the app as a
+// control_request (--permission-prompts host), unless the folder's own
+// Claude Code settings allow it.
+export function buildArgs(sessionId, model = 'default', folder = null) {
   const args = [
-    '-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config',
-    '--setting-sources', 'user', '--system-prompt', SYSTEM_PROMPT,
+    '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    '--permission-prompts', 'host',
   ];
+  if (folder) {
+    // Normal Claude Code in the folder: default prompt, settings, MCP and tools.
+    args.push('--allowedTools', FOLDER_ALLOWED_TOOLS);
+  } else {
+    // --tools limits the built-in tools to the web ones; --strict-mcp-config
+    // without --mcp-config loads no MCP server tools; --setting-sources user
+    // skips project/local settings (auth is user-level).
+    args.push(
+      '--tools', WEB_TOOLS, '--allowedTools', WEB_TOOLS, '--strict-mcp-config',
+      '--setting-sources', 'user', '--system-prompt', SYSTEM_PROMPT,
+    );
+  }
   if (MODEL_FLAGS.includes(model)) args.push('--model', model);
   if (sessionId) args.push('--resume', sessionId);
   return args;
@@ -130,76 +151,184 @@ export function answeringModel(data) {
   return best;
 }
 
-function parseResult(stdout) {
+function isDirectory(dir) {
   try {
-    const data = JSON.parse(stdout.trim());
-    return data && typeof data === 'object' ? data : null;
+    return statSync(dir).isDirectory();
   } catch {
-    return null;
+    return false;
   }
 }
 
-export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd = defaultClaudeHome() } = {}) {
-  function run({ prompt, sessionId, model } = {}) {
+// Runs one turn. Options:
+// - prompt, sessionId, model: as before; folder: the chat's work folder (cwd
+//   and Claude Code's defaults) or null for the general assistant;
+// - signal: aborting it stops the turn (open requests are denied first) and
+//   resolves { text so far, sessionId, stopped: true };
+// - onSession(id): the session id, from the first event that carries one;
+// - onActivity(line): a new activity line { text, detail }; its output is
+//   filled in later on the same object;
+// - onPermission({ requestId, toolName, input }) -> 'allow' | 'deny' (or a
+//   promise of it). The idle timeout is paused while a request is open.
+// Resolves { text, sessionId } (the text Claude wrote, joined).
+export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd = defaultClaudeHome(), graceMs = 300 } = {}) {
+  function run({ prompt, sessionId, model, folder = null, signal, onSession, onActivity, onPermission } = {}) {
     return new Promise((resolve, reject) => {
       let target;
       try {
-        target = resolveCommand(command, buildArgs(sessionId, model));
-        mkdirSync(cwd, { recursive: true });
+        target = resolveCommand(command, buildArgs(sessionId, model, folder));
+        if (folder) {
+          if (!isDirectory(folder)) throw new ClaudeError('folder_missing');
+        } else {
+          mkdirSync(cwd, { recursive: true });
+        }
       } catch (err) {
         return reject(err instanceof ClaudeError ? err : new ClaudeError('failed', err.message));
       }
+      if (signal?.aborted) return resolve({ text: '', sessionId: null, stopped: true });
       const child = spawn(target.file, target.args, {
-        cwd,
+        cwd: folder || cwd,
         shell: false,
         windowsHide: true,
         windowsVerbatimArguments: target.windowsVerbatimArguments || false,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      let stdout = '';
+      const closed = new Promise((r) => child.on('close', r));
+      const texts = [];
+      const tools = new Map(); // tool_use id -> activity line
+      const open = new Map(); // permission request id -> tool input
+      let streamedSession = null;
+      let result = null;
+      let junk = false;
+      let buffer = '';
       let stderr = '';
       let settled = false;
-      let timedOut = false;
+      let ended = false; // timed out or stopped: the close handler stays out
+      let timer = null;
       const finish = (err, value) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', stop);
         if (err) reject(err);
         else resolve(value);
       };
-      const timer = setTimeout(() => {
-        if (settled) return;
-        // Settle only after the kill finished, so the tree is gone when we reject.
-        timedOut = true;
-        killTree(child).then(() => finish(new ClaudeError('timeout')));
-      }, timeoutMs);
+      const write = (text) => {
+        if (!child.stdin.writableEnded && !child.stdin.destroyed) child.stdin.write(text, 'utf8');
+      };
+      // Idle timeout: re-armed by every stream event, paused while a
+      // permission request waits for the user.
+      const arm = () => {
+        clearTimeout(timer);
+        if (ended || settled || open.size > 0) return;
+        timer = setTimeout(() => {
+          if (ended || settled) return;
+          ended = true;
+          // Settle only after the kill finished, so the tree is gone when we reject.
+          killTree(child).then(() => finish(new ClaudeError('timeout')));
+        }, timeoutMs);
+      };
 
-      child.stdout.setEncoding('utf8').on('data', (d) => { stdout += d; });
+      function answer(requestId, behavior) {
+        if (!open.has(requestId)) return;
+        const input = open.get(requestId);
+        open.delete(requestId);
+        write(permissionResponseLine(requestId, behavior === 'allow' ? 'allow' : 'deny', input));
+        arm();
+      }
+
+      function handle(text) {
+        if (!text.trim()) return;
+        const ev = parseLine(text);
+        if (!ev) {
+          junk = true;
+          return;
+        }
+        if (ended) return;
+        const e = readEvent(ev);
+        if (e.sessionId && !streamedSession) {
+          streamedSession = e.sessionId;
+          onSession?.(e.sessionId);
+        }
+        if (e.kind === 'permission') {
+          open.set(e.requestId, e.input);
+          clearTimeout(timer);
+          Promise.resolve()
+            .then(() => (onPermission ? onPermission({ requestId: e.requestId, toolName: e.toolName, input: e.input }) : 'deny'))
+            .then((behavior) => answer(e.requestId, behavior), () => answer(e.requestId, 'deny'));
+          return;
+        }
+        if (e.kind === 'control' && e.requestId) write(unsupportedResponseLine(e.requestId));
+        else if (e.kind === 'assistant') {
+          texts.push(...e.texts);
+          for (const use of e.toolUses) {
+            const line = activityLine(use.name, use.input);
+            if (use.id) tools.set(use.id, line);
+            onActivity?.(line);
+          }
+        } else if (e.kind === 'tool_results') {
+          for (const r of e.results) {
+            const line = tools.get(r.id);
+            if (line) Object.assign(line, truncateOutput(r.output));
+          }
+        } else if (e.kind === 'result') {
+          result = { ...e, sessionId: e.sessionId ?? streamedSession };
+          child.stdin.end();
+        }
+        arm();
+      }
+
+      // Stop: deny the open requests, close stdin, give `claude` a moment to
+      // read the answers, then kill the tree.
+      function stop() {
+        if (ended || settled) return;
+        ended = true;
+        clearTimeout(timer);
+        for (const id of [...open.keys()]) answer(id, 'deny');
+        child.stdin.end();
+        const grace = new Promise((r) => setTimeout(r, graceMs));
+        Promise.race([closed, grace])
+          .then(() => killTree(child))
+          .then(() => finish(null, { text: texts.join('\n\n'), sessionId: streamedSession, stopped: true }));
+      }
+      signal?.addEventListener('abort', stop, { once: true });
+
+      child.stdout.setEncoding('utf8').on('data', (d) => {
+        buffer += d;
+        let i;
+        while ((i = buffer.indexOf('\n')) >= 0) {
+          const text = buffer.slice(0, i);
+          buffer = buffer.slice(i + 1);
+          handle(text);
+        }
+      });
       child.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
       child.stdin.on('error', () => {}); // child may exit before reading stdin
       child.on('error', (err) => {
         finish(err.code === 'ENOENT' ? new ClaudeError('cli_missing') : new ClaudeError('failed', err.message));
       });
       child.on('close', (code) => {
-        if (timedOut) return;
-        const data = parseResult(stdout);
-        const resultText = data && typeof data.result === 'string' ? data.result : '';
-        const ok = code === 0 && data && data.is_error !== true && typeof data.result === 'string';
+        if (ended) return;
+        handle(buffer);
+        buffer = '';
+        if (ended) return;
+        const resultText = result?.text ?? '';
+        const ok = code === 0 && result && !result.isError && typeof result.text === 'string';
         if (ok) {
-          const answer = { text: data.result, sessionId: data.session_id ?? null };
-          const model = answeringModel(data);
-          return finish(null, model ? { ...answer, model } : answer);
+          const answer = { text: texts.length ? texts.join('\n\n') : result.text, sessionId: result.sessionId ?? null };
+          const answered = answeringModel(result);
+          return finish(null, answered ? { ...answer, model: answered } : answer);
         }
         // On Windows cmd.exe reports a missing command with exit code 9009.
-        if (process.platform === 'win32' && code === 9009 && !data) return finish(new ClaudeError('cli_missing'));
+        if (process.platform === 'win32' && code === 9009 && !result) return finish(new ClaudeError('cli_missing'));
         if (MODEL_REJECTED.test(stderr) || MODEL_REJECTED.test(resultText)) {
           return finish(new ClaudeError('model_rejected', model));
         }
         if (AUTH.test(stderr) || AUTH.test(resultText)) return finish(new ClaudeError('not_logged_in'));
-        const detail = code !== 0 ? `exit ${code}` : data ? 'is_error' : 'invalid JSON';
+        const detail = code !== 0 ? `exit ${code}` : result ? 'is_error' : junk ? 'invalid JSON' : 'no result';
         finish(new ClaudeError('failed', detail));
       });
-      child.stdin.end(prompt ?? '', 'utf8');
+      arm();
+      write(userLine(prompt));
     });
   }
   return { run };

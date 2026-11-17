@@ -70,13 +70,13 @@ test('GET /api/chats skips corrupt files with a warning', async (t) => {
   assert.equal(warnings.length, 2);
 });
 
-test('GET /api/chats/:id returns the chat plus pendingStep, 404 when unknown', async (t) => {
+test('GET /api/chats/:id returns the chat plus pendingStep and live, 404 when unknown', async (t) => {
   const dir = await tempDir(t);
   const { chatStore, port } = await startApp(t, dir);
   const chat = await seed(chatStore, 'hi', [user('m1'), assistant('m2')]);
   let r = await request(port, 'GET', '/api/chats/' + chat.id);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { ...chat, pendingStep: null });
+  assert.deepEqual(r.json, { ...chat, pendingStep: null, live: null });
   r = await request(port, 'GET', '/api/chats/44444444-4444-4444-8444-444444444444');
   assert.equal(r.status, 404);
 });

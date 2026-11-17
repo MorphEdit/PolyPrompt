@@ -112,21 +112,36 @@ export function createChatStore({ dir = 'data/chats', now = () => new Date() } =
       return read(id + '.json');
     },
 
-    async create(firstText) {
+    // extra: { folder, sessionId, resumedFrom } for a folder chat or a
+    // continued Claude Code session.
+    async create(firstText, { folder = null, sessionId = null, resumedFrom = null } = {}) {
       const at = now().toISOString();
       const chat = {
         id: newId(),
         title: makeTitle(firstText),
         createdAt: at,
         updatedAt: at,
-        sessionId: null,
+        sessionId,
         lang: null,
         messages: [],
       };
+      if (folder) chat.folder = folder;
+      if (resumedFrom) chat.resumedFrom = resumedFrom;
       return save(chat);
     },
 
     save,
+
+    // Claude Code session ids already used by a saved chat (its sessionId or
+    // resumedFrom).
+    async usedSessionIds() {
+      const ids = new Set();
+      for (const chat of await readAll()) {
+        if (typeof chat.sessionId === 'string') ids.add(chat.sessionId);
+        if (typeof chat.resumedFrom === 'string') ids.add(chat.resumedFrom);
+      }
+      return ids;
+    },
 
     // Returns true when a file was removed, false when the id is unknown.
     async remove(id) {
