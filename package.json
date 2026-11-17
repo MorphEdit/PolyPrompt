@@ -1,0 +1,14 @@
+{
+  "name": "polyprompt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local multilingual chat with Claude Code",
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  }
+}
