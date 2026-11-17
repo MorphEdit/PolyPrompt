@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
-  lastMessageHasError, escapeHtml, renderMarkdown,
+  retryEnabled, lastMessageHasError, escapeHtml, renderMarkdown,
 } from '../public/logic.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -180,4 +180,11 @@ test('the page loads no remote resources', async () => {
   }
   const index = await readFile(path.join(publicDir, 'index.html'), 'utf8');
   assert.match(index, /<script type="module" src="\/app.js"><\/script>/);
+});
+
+test('retryEnabled: only when no reply is pending and the model is ready', () => {
+  assert.equal(retryEnabled({ pending: false, modelState: 'ready' }), true);
+  assert.equal(retryEnabled({ pending: true, modelState: 'ready' }), false);
+  assert.equal(retryEnabled({ pending: false, modelState: 'loading' }), false);
+  assert.equal(retryEnabled({ pending: false, modelState: 'error' }), false);
 });

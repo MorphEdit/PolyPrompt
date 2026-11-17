@@ -51,6 +51,11 @@ export function canRetry(messages, index) {
   return index === messages.length - 1 && m?.role === 'user' && !!m.error;
 }
 
+// Whether the "ส่งใหม่" button of a retryable message can be clicked now.
+export function retryEnabled({ pending, modelState }) {
+  return !pending && modelState === 'ready';
+}
+
 export function lastMessageHasError(chat) {
   const last = chat?.messages?.at(-1);
   return !!last?.error;

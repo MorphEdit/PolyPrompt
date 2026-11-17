@@ -1,6 +1,6 @@
 import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
-  lastMessageHasError, renderMarkdown,
+  retryEnabled, lastMessageHasError, renderMarkdown,
 } from './logic.js';
 
 const POLL_MS = 1000;
@@ -26,6 +26,7 @@ const state = {
 };
 
 let chatPollTimer = null;
+let retryButton = null; // the "ส่งใหม่" button of the open chat, if any
 let statusPollTimer = null;
 
 class ApiError extends Error {
@@ -64,6 +65,9 @@ function updateComposer() {
     modelState: state.model.state,
     lastMessageHasError: lastMessageHasError(state.chat),
   });
+  // The model state can change without a re-render of the chat (status poll),
+  // so the retry button's state is kept in sync here too.
+  if (retryButton) retryButton.disabled = !retryEnabled({ pending: isPending(), modelState: state.model.state });
   const step = state.chat?.pendingStep;
   const label = step != null ? stepLabel(step) : state.busy ? 'กำลังส่ง…' : '';
   els.statusLine.textContent = label;
@@ -203,7 +207,7 @@ function renderMessage(m, index, messages) {
         const retry = document.createElement('button');
         retry.type = 'button';
         retry.textContent = 'ส่งใหม่';
-        retry.disabled = isPending() || state.model.state !== 'ready';
+        retryButton = retry;
         retry.addEventListener('click', () => retryMessage(m.id));
         err.append(retry);
       }
@@ -230,6 +234,7 @@ function renderMessage(m, index, messages) {
 function renderChat() {
   const atBottom = els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight < 40;
   const messages = state.chat?.messages ?? [];
+  retryButton = null;
   if (messages.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty';
