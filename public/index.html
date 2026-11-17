@@ -4,9 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PolyPrompt</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <h1>PolyPrompt</h1>
-  <p>กำลังพัฒนา — หน้าแชทจะมาในเวอร์ชันถัดไป</p>
+  <aside class="sidebar">
+    <div class="brand">PolyPrompt</div>
+    <button id="new-chat" class="new-chat" type="button">+ แชทใหม่</button>
+    <div class="sidebar-label">แชทที่บันทึกไว้</div>
+    <ul id="chat-list" class="chat-list"></ul>
+  </aside>
+  <main class="main">
+    <div id="model-banner" class="banner" hidden></div>
+    <div id="error-banner" class="banner banner-error" hidden></div>
+    <section id="messages" class="messages" aria-live="polite"></section>
+    <div id="status-line" class="status-line" hidden></div>
+    <form id="composer" class="composer">
+      <textarea id="input" rows="1" placeholder="พิมพ์ข้อความเป็นภาษาใดก็ได้… (Enter เพื่อส่ง, Shift+Enter ขึ้นบรรทัดใหม่)"></textarea>
+      <button id="send" type="submit" disabled>ส่ง</button>
+    </form>
+  </main>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
