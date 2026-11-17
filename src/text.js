@@ -134,29 +134,60 @@ async function translatePiece(translator, piece, srcLang, tgtLang) {
   return joined;
 }
 
-// Translate a run of plain text, keeping its surrounding whitespace.
-async function translateRun(translator, run, srcLang, tgtLang, maxChars) {
+// Add a run of plain text to `parts`: its surrounding whitespace and the
+// separators stay strings, each piece to translate becomes { piece }.
+function collectRun(parts, run, maxChars) {
   const [, lead, body, trail] = EDGE_SPACE.exec(run);
-  if (!hasLetters(body)) return run;
-  let out = '';
-  for (const { piece, sep } of splitText(body, maxChars, { keep: PLACEHOLDER })) {
-    out += (await translatePiece(translator, piece, srcLang, tgtLang)) + sep;
-  }
-  return lead + out + trail;
+  if (!hasLetters(body)) { parts.push(run); return; }
+  parts.push(lead);
+  for (const { piece, sep } of splitText(body, maxChars, { keep: PLACEHOLDER })) parts.push({ piece }, sep);
+  parts.push(trail);
 }
 
+// Run fn over items with at most `limit` calls at once; results keep the
+// items' order. Stops starting new calls after the first failure.
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed && next < items.length) {
+      const i = next++;
+      try {
+        results[i] = await fn(items[i]);
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return results;
+}
+
+// Pieces translated at once when the translator does not say how many it can
+// run (the model manager's queue bounds the real number).
+export const DEFAULT_CONCURRENCY = 4;
+
 // Translate line by line: Markdown prefixes and inline markers are kept as-is
-// and only the plain-text runs between them go to the translator.
-export async function translateText(translator, text, srcLang, tgtLang, { maxChars = 2000 } = {}) {
+// and only the plain-text runs between them go to the translator. Independent
+// pieces are translated concurrently (up to translator.concurrency at once)
+// and joined in their original order.
+export async function translateText(translator, text, srcLang, tgtLang, { maxChars = 2000, concurrency } = {}) {
   const { text: safe, restore } = protect(text);
-  let out = '';
+  const parts = [];
   for (const [i, line] of safe.split(LINE_BREAK).entries()) {
-    if (i % 2) { out += line; continue; }
+    if (i % 2) { parts.push(line); continue; }
     const prefix = LINE_PREFIX.exec(line)[0];
-    out += prefix;
+    parts.push(prefix);
     for (const [j, part] of line.slice(prefix.length).split(INLINE_MARKER).entries()) {
-      out += j % 2 ? part : await translateRun(translator, part, srcLang, tgtLang, maxChars);
+      if (j % 2) parts.push(part);
+      else collectRun(parts, part, maxChars);
     }
   }
-  return restore(out);
+  const jobs = parts.filter((p) => typeof p !== 'string');
+  const limit = concurrency ?? translator.concurrency ?? DEFAULT_CONCURRENCY;
+  const done = await mapLimit(jobs, limit, (job) => translatePiece(translator, job.piece, srcLang, tgtLang));
+  let k = 0;
+  return restore(parts.map((p) => (typeof p === 'string' ? p : done[k++])).join(''));
 }

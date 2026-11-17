@@ -158,8 +158,9 @@ test('loader downloads a missing size with progress, then translates greedily wi
   assert.deepEqual(progress, [0.4, 0.99, 1]);
   assert.deepEqual(log.loads, [path.join(cacheDir, modelFileName('4b'))]);
 
+  assert.equal(log.generations.length, 1, 'the warm-up translation runs while loading');
   assert.equal(await translator.translate('สวัสดี', 'th', 'en'), 'Hello');
-  const [gen] = log.generations;
+  const gen = log.generations.at(-1);
   assert.deepEqual(gen.history, [{ type: 'user', text: TH_EN }, { type: 'model', response: [] }]);
   assert.equal(gen.options.temperature, 0);
   assert.equal(gen.options.maxTokens, maxTokensFor('สวัสดี'));

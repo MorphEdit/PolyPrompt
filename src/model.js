@@ -1,8 +1,9 @@
-// Translation-model manager: one loaded model at a time, translations run one
-// at a time through a queue, and the translator size can be switched.
+// Translation-model manager: one loaded model at a time, translations run
+// through a queue (up to translator.concurrency at once, loads alone), and the
+// translator size can be switched.
 //
 // Injected (so tests use fakes):
-//   load(onProgress, { size }) -> translator { translate(text, src, tgt), dispose?() };
+//   load(onProgress, { size }) -> translator { translate(text, src, tgt), dispose?(), concurrency? };
 //     downloads the size first when it is missing.
 //   download(size, onProgress) -> resolves once the size's file is complete.
 //   isDownloaded(size) -> boolean.
@@ -45,29 +46,38 @@ export function createModelManager({
   let started = false;
   let token = 0;
 
-  // Serial task queue; a task starts synchronously when the queue is idle.
+  // FIFO task queue; a task starts synchronously when it may run. Exclusive
+  // tasks (loads) run alone; shared tasks (translations) run up to the loaded
+  // translator's concurrency at once.
   const tasks = [];
-  let running = false;
-  function enqueue(fn) {
+  let active = 0;
+  let exclusive = false;
+  const sharedLimit = () => Math.max(1, translator?.concurrency ?? 1);
+  function enqueue(fn, { shared = false } = {}) {
     return new Promise((resolve, reject) => {
-      tasks.push({ fn, resolve, reject });
+      tasks.push({ fn, shared, resolve, reject });
       pump();
     });
   }
   function pump() {
-    if (running || tasks.length === 0) return;
-    running = true;
-    const { fn, resolve, reject } = tasks.shift();
-    let result;
-    try {
-      result = Promise.resolve(fn());
-    } catch (err) {
-      result = Promise.reject(err);
+    while (tasks.length && !exclusive) {
+      const { shared } = tasks[0];
+      if (shared ? active >= sharedLimit() : active > 0) return;
+      const { fn, resolve, reject } = tasks.shift();
+      active++;
+      exclusive = !shared;
+      let result;
+      try {
+        result = Promise.resolve(fn());
+      } catch (err) {
+        result = Promise.reject(err);
+      }
+      result.then(resolve, reject).finally(() => {
+        active--;
+        if (!shared) exclusive = false;
+        pump();
+      });
     }
-    result.then(resolve, reject).finally(() => {
-      running = false;
-      pump();
-    });
   }
 
   const progressFor = (t) => (p) => {
@@ -196,7 +206,7 @@ export function createModelManager({
       return enqueue(() => {
         if (!translator) throw new Error('translation model is not loaded');
         return translator.translate(text, srcLang, tgtLang);
-      });
+      }, { shared: true });
     },
     // Starts a size change in the background. Returns 'busy' (nothing done),
     // 'unchanged' (already loaded) or 'started'. The returned `done` promise
