@@ -269,6 +269,25 @@ test('allow_chat is stored on the chat; it auto-allows the same tool or Bash pre
   await api.idle(other);
 });
 
+test('a stored git status rule does not auto-allow a command chained with a single &', async (t) => {
+  const { api, folder } = await setup(t);
+  await api.script([
+    init('s-amp'),
+    ask('g1', 'Bash', { command: 'git status' }),
+    ask('g2', 'Bash', { command: 'git status & echo pwned' }), // single &: card
+    result('ok', 's-amp'),
+  ]);
+  const id = await api.start({ text: 'go', folder });
+  let chat = await api.until(id, (c) => c.live?.card?.requestId === 'g1', 'g1');
+  await api.answer(id, 'g1', { token: chat.live.card.token, decision: 'allow_chat' });
+  chat = await api.until(id, (c) => c.live?.card?.requestId === 'g2', 'the card for the chained command');
+  assert.equal(chat.live.card.detail, 'git status & echo pwned');
+  assert.equal((await api.answer(id, 'g2', { token: chat.live.card.token, decision: 'deny' })).status, 200);
+  const done = await api.idle(id);
+  assert.deepEqual(done.permissions, [{ tool: 'Bash', prefix: 'git status' }]);
+  assert.deepEqual((await api.log()).responses.map((r) => [r.request_id, r.response.behavior]), [['g1', 'allow'], ['g2', 'deny']]);
+});
+
 test('cards, activity and commands are never passed through the translator', async (t) => {
   const { api, folder, translator } = await setup(t);
   const command = 'git commit -m "secret command text"';

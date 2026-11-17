@@ -102,7 +102,8 @@ export function truncateOutput(text) {
   return s.length > OUTPUT_MAX ? { output: s.slice(0, OUTPUT_MAX), truncated: true } : { output: s };
 }
 
-const SHELL_OPERATOR = /;|&&|\|\||\||`|\$\(|>|<|\n|\r/;
+// A single & also covers &&: bash and cmd.exe run the next command after it.
+const SHELL_OPERATOR = /;|&|\|\||\||`|\$\(|>|<|\n|\r/;
 
 export const hasShellOperator = (command) => SHELL_OPERATOR.test(str(command));
 

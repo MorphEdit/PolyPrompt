@@ -15,6 +15,18 @@ test('every shell operator is detected', () => {
   assert.equal(hasShellOperator('npm test -- --watch'), false);
 });
 
+test('a single & is a shell operator anywhere in the command', () => {
+  for (const c of ['a & b', 'a &', 'a&b', 'git status & rm -rf src', 'a && b', 'a\rb']) {
+    assert.equal(hasShellOperator(c), true, c);
+  }
+  const rules = [ruleFor('Bash', { command: 'git status' })];
+  assert.equal(isAutoAllowed(rules, 'Bash', { command: 'git status & rm -rf src' }), false);
+  assert.equal(isAutoAllowed(rules, 'Bash', { command: 'git status &' }), false);
+  assert.equal(isAutoAllowed(rules, 'Bash', { command: 'git status&rm x' }), false);
+  assert.equal(isAutoAllowed(rules, 'Bash', { command: 'git status' }), true);
+  assert.equal(ruleFor('Bash', { command: 'git status & rm -rf src' }), null);
+});
+
 test('a stored rule allows the same tool; for Bash only the same two-word prefix without operators', () => {
   const rules = [ruleFor('Edit', { file_path: 'a' }), ruleFor('Bash', { command: 'npm test -- --watch' })];
   assert.deepEqual(rules, [{ tool: 'Edit' }, { tool: 'Bash', prefix: 'npm test' }]);
