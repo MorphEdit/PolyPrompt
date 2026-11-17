@@ -72,12 +72,22 @@ const SCRIPTS = {
   ko: /[\p{Script=Hangul}\p{Script=Han}]/u,
 };
 
+// Languages the detector often confuses with each other; a translation detected
+// as a close sibling of the target is still accepted.
+const CLOSE_LANGUAGES = [
+  ['da', 'no', 'sv'], ['hr', 'sr', 'sl'], ['cs', 'sk'], ['es', 'pt', 'ca'], ['ru', 'uk', 'bg'],
+  ['hi', 'mr'], ['ar', 'fa', 'ur'], ['zh', 'ja'],
+];
+
+const closeTo = (a, b) => a === b || CLOSE_LANGUAGES.some((g) => g.includes(a) && g.includes(b));
+
 const lineCount = (text) => text.split('\n').filter((l) => l.trim()).length;
 
 // True unless `out` looks like an answer to `src` rather than its translation
 // into `tgtLang`: more lines or list lines than the source, far longer than
-// the source, mostly letters outside the target's script, or detected as the
-// source language.
+// the source, no letters or mostly non-Latin letters outside the target's
+// script (Latin names such as "React" are allowed in a non-Latin target), or
+// detected as a language other than the target.
 export function looksLikeTranslation(src, out, srcLang, tgtLang, { detect = detectLanguage } = {}) {
   const source = String(src ?? '').trim();
   const text = String(out ?? '').trim();
@@ -87,11 +97,12 @@ export function looksLikeTranslation(src, out, srcLang, tgtLang, { detect = dete
   if (text.length > 2 * weight + 30) return false;
   const letters = text.match(/\p{L}/gu) ?? [];
   if (letters.every((c) => LATIN.test(c)) && letters.length < MIN_LATIN_LETTERS) return true;
-  const script = SCRIPTS[tgtLang] ?? LATIN;
-  if (2 * letters.filter((c) => script.test(c)).length < letters.length) return false;
+  const script = SCRIPTS[tgtLang];
+  const judged = script ? letters.filter((c) => !LATIN.test(c)) : letters;
+  if (!judged.length || 2 * judged.filter((c) => (script ?? LATIN).test(c)).length < judged.length) return false;
   if (srcLang === tgtLang) return true;
   const found = detect(text);
-  return !(found.kind === 'ok' && found.lang === srcLang);
+  return !(found.kind === 'ok' && !closeTo(found.lang, tgtLang));
 }
 
 const QUOTE_PAIRS = [['"', '"'], ['“', '”'], ["'", "'"], ['「', '」'], ['«', '»']];

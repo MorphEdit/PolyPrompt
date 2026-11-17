@@ -76,3 +76,26 @@ test('maxTokens is bounded by the input length (#36)', async () => {
   await createTranslator(complete).translate(SOURCE, 'th', 'en');
   assert.deepEqual(calls[0].opts, { maxTokens: maxTokensFor(SOURCE) });
 });
+
+test('output in a third language with the target script is retried and rejected (#36)', async () => {
+  const src = 'Please suggest three short tips for better sleep tonight, please.';
+  const french = 'Veuillez suggérer trois conseils courts pour mieux dormir ce soir, s’il vous plaît.';
+  assert.equal(looksLikeTranslation(src, french, 'en', 'de'), false);
+  const { complete, calls } = fake(french);
+  await assert.rejects(createTranslator(complete).translate(src, 'en', 'de'), NotTranslatedError);
+  assert.equal(calls.length, 2);
+});
+
+test('a translation detected as a close sibling of the target is kept (#36)', () => {
+  assert.equal(looksLikeTranslation('Use React and Vue together today.', 'Brug React og Vue sammen i dag.', 'en', 'no'), true);
+});
+
+test('a non-Latin translation full of Latin product names is kept (#36)', async () => {
+  const src = 'Use React, Vue, Svelte and Angular together.';
+  const thai = 'ใช้ React, Vue, Svelte และ Angular ร่วมกัน';
+  const { complete, calls } = fake(thai);
+  assert.equal(await createTranslator(complete).translate(src, 'en', 'th'), thai);
+  assert.equal(calls.length, 1);
+  // An English answer for a Thai target is still rejected.
+  assert.equal(looksLikeTranslation(src, 'Sure, React, Vue, Svelte and Angular work well together.', 'en', 'th'), false);
+});
