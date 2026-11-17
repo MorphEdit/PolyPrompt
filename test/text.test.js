@@ -154,3 +154,30 @@ test('a multi-sentence run of up to 2000 characters is one translator call; a lo
   assert.ok(t2.calls.every((c) => c.text.length <= 2000));
   assert.equal(out2, long.toUpperCase());
 });
+
+test('with the default maxChars a run over 2000 characters is split at paragraph breaks, in order', async () => {
+  const para = (n) => Array.from({ length: 40 }, (_, i) => `Part ${n} sentence ${i} is about topic ${i * 7 + n}.`).join(' ');
+  const paras = [para(1), para(2), para(3)];
+  assert.ok(paras.every((p) => p.length > 1000 && p.length <= 2000), String(paras.map((p) => p.length)));
+  const text = paras.join('\n\n');
+  assert.ok(text.length > 2000);
+  const t = fakeTranslator();
+  const out = await translateText(t, text, 'en', 'th');
+  assert.ok(t.calls.length > 1);
+  assert.ok(t.calls.every((c) => c.text.length <= 2000));
+  assert.deepEqual(t.calls.map((c) => c.text), paras, 'cut only at the paragraph breaks');
+  assert.equal(out, text.toUpperCase());
+});
+
+test('with the default maxChars one paragraph over 2000 characters is split at sentence ends', async () => {
+  const sentences = Array.from({ length: 100 }, (_, i) => `Sentence ${i} is about topic ${i * 7}.`);
+  const text = sentences.join(' ');
+  assert.ok(text.length > 2000 && !text.includes('\n'));
+  const t = fakeTranslator();
+  const out = await translateText(t, text, 'en', 'th');
+  assert.ok(t.calls.length > 1);
+  assert.ok(t.calls.every((c) => c.text.length <= 2000));
+  assert.ok(t.calls.every((c) => /\.$/.test(c.text) && sentences.includes(c.text.split(/(?<=\.) /)[0])), 'cut at sentence ends');
+  assert.equal(t.calls.map((c) => c.text).join(' '), text);
+  assert.equal(out, text.toUpperCase());
+});

@@ -151,3 +151,17 @@ test('a turn waiting on a switch that ends in error shows the translate error', 
   assert.equal(chat.messages.length, 1);
   assert.equal(chat.messages[0].error.message, TRANSLATE_FAILED);
 });
+
+test('runTurn with the default maxChars splits a back-translation over 2000 characters, in order', async (t) => {
+  const s = await setup(t);
+  assert.equal('maxChars' in s.deps, false);
+  const answer = Array.from({ length: 100 }, (_, i) => `Sentence ${i} is about topic ${i * 7}.`).join(' ');
+  assert.ok(answer.length > 2000, String(answer.length));
+  s.runner.reply = () => answer;
+  const chat = await s.turn('สวัสดี');
+  const back = s.calls.slice(1);
+  assert.ok(back.length > 1, String(back.length));
+  assert.ok(back.every((c) => c.text.length <= 2000 && c.tgt === 'th'));
+  assert.equal(back.map((c) => c.text).join(' '), answer);
+  assert.equal(chat.messages.at(-1).original, back.map((c) => `<4b:th>${c.text}`).join(' '));
+});
