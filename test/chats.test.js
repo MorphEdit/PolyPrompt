@@ -30,11 +30,11 @@ async function seed(store, text, messages) {
 }
 
 const user = (id, extra = {}) => ({
-  id, role: 'user', original: 'สวัสดี', english: 'Hello', lang: 'tha_Thai',
+  id, role: 'user', original: 'สวัสดี', english: 'Hello', lang: 'th',
   createdAt: '2026-01-01T00:00:00.000Z', ...extra,
 });
 const assistant = (id) => ({
-  id, role: 'assistant', original: 'ครับ', english: 'Yes', lang: 'tha_Thai',
+  id, role: 'assistant', original: 'ครับ', english: 'Yes', lang: 'th',
   createdAt: '2026-01-01T00:00:01.000Z',
 });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));

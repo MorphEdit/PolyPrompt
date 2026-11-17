@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { LANGUAGES, fromLegacyCode } from './lang.js';
 
 export const TITLE_MAX = 50;
 export const INTERRUPTED_MESSAGE = 'การตอบกลับถูกขัดจังหวะ กรุณากดส่งใหม่';
@@ -19,7 +20,7 @@ export function makeTitle(text) {
 // Windows refuses to replace a file another handle is reading (EPERM/EACCES/
 // EBUSY), e.g. while the page polls the chat; such renames are retried briefly.
 const BUSY = new Set(['EPERM', 'EACCES', 'EBUSY']);
-async function renameRetry(from, to, tries = 20) {
+export async function renameRetry(from, to, tries = 20) {
   for (let i = 1; ; i++) {
     try {
       return await rename(from, to);
@@ -32,6 +33,19 @@ async function renameRetry(from, to, tries = 20) {
 
 const isChat = (c) => c !== null && typeof c === 'object'
   && typeof c.id === 'string' && Array.isArray(c.messages);
+
+// Chats saved before TranslateGemma hold NLLB codes (tha_Thai): map them to
+// ISO 639-1. A chat language that is no longer supported becomes null.
+function upgradeLangs(chat) {
+  if (chat.lang != null) {
+    const lang = fromLegacyCode(chat.lang);
+    chat.lang = Object.hasOwn(LANGUAGES, lang) ? lang : null;
+  }
+  for (const m of chat.messages) {
+    if (m && typeof m === 'object' && m.lang != null) m.lang = fromLegacyCode(m.lang);
+  }
+  return chat;
+}
 
 export function createChatStore({ dir = 'data/chats', now = () => new Date() } = {}) {
   const ready = mkdir(dir, { recursive: true });
@@ -57,7 +71,7 @@ export function createChatStore({ dir = 'data/chats', now = () => new Date() } =
       console.warn(`skipping chat file ${name}: missing id or messages`);
       return null;
     }
-    return chat;
+    return upgradeLangs(chat);
   }
 
   async function readAll() {

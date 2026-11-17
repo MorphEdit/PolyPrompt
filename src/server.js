@@ -4,7 +4,9 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { detectLanguage } from './lang.js';
 import { createPending, runTurn } from './pipeline.js';
+import { isClaudeModel } from './settings.js';
 import { newId } from './store.js';
+import { isSize } from './translator.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -58,6 +60,25 @@ async function readJson(req) {
   }
 }
 
+function settingsBody(deps) {
+  const { translatorSize, claudeModel } = deps.settings.get();
+  return { translatorSize, claudeModel, downloadedSizes: deps.modelManager.downloadedSizes() };
+}
+
+const SETTING_CHECKS = { translatorSize: isSize, claudeModel: isClaudeModel };
+
+// Returns an error message for an invalid PUT /api/settings body, else null.
+function settingsBodyError(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return 'body must be an object';
+  const keys = Object.keys(body);
+  if (keys.length === 0) return 'translatorSize or claudeModel is required';
+  for (const key of keys) {
+    if (!Object.hasOwn(SETTING_CHECKS, key)) return `unknown setting: ${key}`;
+    if (!SETTING_CHECKS[key](body[key])) return `invalid ${key}`;
+  }
+  return null;
+}
+
 // Starts the turn in the background; the pending entry is already set.
 function startTurn(deps, chat, message) {
   runTurn(deps, chat, message).catch((err) => console.error(err));
@@ -69,7 +90,33 @@ export const routes = [
   {
     method: 'GET',
     path: '/api/status',
-    handler: ({ res, deps }) => sendJson(res, 200, { model: deps.modelManager.status() }),
+    handler: ({ res, deps }) => sendJson(res, 200, {
+      model: deps.modelManager.status(),
+      switch: deps.modelManager.switchStatus(),
+    }),
+  },
+  {
+    method: 'GET',
+    path: '/api/settings',
+    handler: ({ res, deps }) => sendJson(res, 200, settingsBody(deps)),
+  },
+  {
+    method: 'PUT',
+    path: '/api/settings',
+    handler: async ({ req, res, deps }) => {
+      const body = await readJson(req);
+      const invalid = settingsBodyError(body);
+      if (invalid) return sendError(res, 400, invalid);
+      const { modelManager } = deps;
+      const size = body.translatorSize;
+      if (size !== undefined && modelManager.isBusy() && size !== modelManager.status().size) {
+        return sendError(res, 409, 'the translator size is already changing');
+      }
+      if (body.claudeModel !== undefined) await deps.settings.update({ claudeModel: body.claudeModel });
+      // The size is saved by the model manager once it has loaded.
+      if (size !== undefined) modelManager.selectSize(size).done.catch((err) => console.error(err));
+      sendJson(res, 200, settingsBody(deps));
+    },
   },
   {
     method: 'POST',
@@ -240,7 +287,7 @@ export function isTrustedRequest(req) {
   return hosts.some((h) => origin.toLowerCase() === `http://${h}`);
 }
 
-// deps: { modelManager, publicDir, chatStore, runner?, detect?, pending?, maxChars? }.
+// deps: { modelManager, publicDir, chatStore, settings?, runner?, detect?, pending?, maxChars? }.
 export function createApp(options) {
   const deps = { detect: detectLanguage, ...options };
   deps.pending ??= createPending();

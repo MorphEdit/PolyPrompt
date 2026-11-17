@@ -16,7 +16,7 @@ const MARKDOWN_SYNTAX = /\*\*|^\s*#|^\s*\d+\.\s|^\s*-\s|\||~~|^\s*>/m;
 test('#21: Markdown syntax is not sent to the translator and survives back-translation', async () => {
   const sent = [];
   const fake = { async translate(t) { sent.push(t); return `[${t}]`; } };
-  const out = await translateText(fake, ANSWER, 'eng_Latn', 'tha_Thai');
+  const out = await translateText(fake, ANSWER, 'en', 'th');
   for (const s of sent) {
     assert.doesNotMatch(s, MARKDOWN_SYNTAX, `Markdown syntax sent to translator: ${JSON.stringify(s)}`);
   }
@@ -46,7 +46,7 @@ test('#21: other Markdown (bullets, quotes, tasks, tables, italics, links, rules
   ].join('\r\n');
   const sent = [];
   const fake = { async translate(t) { sent.push(t); return t.toUpperCase(); } };
-  const out = await translateText(fake, text, 'eng_Latn', 'tha_Thai');
+  const out = await translateText(fake, text, 'en', 'th');
   for (const s of sent) {
     assert.doesNotMatch(s, MARKDOWN_SYNTAX, `Markdown syntax sent to translator: ${JSON.stringify(s)}`);
     assert.doesNotMatch(s.replace('snake_case', ''), /[*_[\]]/, `Markdown syntax sent to translator: ${JSON.stringify(s)}`);
@@ -69,7 +69,7 @@ test('#21: other Markdown (bullets, quotes, tasks, tables, italics, links, rules
 
 test('#21: degenerate translator output falls back to the English piece', async () => {
   const fake = { async translate() { return Array(300).fill('*').join(' '); } };
-  const out = await translateText(fake, ANSWER, 'eng_Latn', 'tha_Thai');
+  const out = await translateText(fake, ANSWER, 'en', 'th');
   assert.doesNotMatch(out, /(\* ){20}/, 'garbage "* * * ..." reached the user');
   assert.equal(out, ANSWER);
 });
@@ -81,7 +81,7 @@ test('#21: a degenerate piece is retried sentence by sentence, only the bad sent
       return `<${t}>`;
     },
   };
-  const out = await translateText(fake, 'Good one. Bad one here. Fine again.', 'eng_Latn', 'tha_Thai');
+  const out = await translateText(fake, 'Good one. Bad one here. Fine again.', 'en', 'th');
   assert.equal(out, '<Good one.> Bad one here. <Fine again.>');
 });
 

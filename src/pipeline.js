@@ -2,7 +2,8 @@
 import { newId } from './store.js';
 import { translateText } from './text.js';
 
-export const ENGLISH = 'eng_Latn';
+export const ENGLISH = 'en';
+export const MAX_CHARS = 2000;
 export const UNSUPPORTED_NOTE = 'ภาษานี้ยังไม่รองรับการแปล จึงแสดงคำตอบเป็นภาษาอังกฤษ';
 export const TRANSLATE_FAILED = 'แปลข้อความไม่สำเร็จ กรุณาลองส่งใหม่';
 export const TURN_FAILED = 'เกิดข้อผิดพลาด กรุณาลองส่งใหม่';
@@ -37,15 +38,17 @@ function errorOf(err) {
 
 // Runs steps 3-7 for the chat's last (user) message. The caller has already
 // set the chat's pending entry; it is always cleared here. Never rejects.
-// deps: { chatStore, modelManager, detect, runner, pending, maxChars? }
+// deps: { chatStore, modelManager, detect, runner, pending, settings?, maxChars? }
 export async function runTurn(deps, chat, message) {
-  const { chatStore, modelManager, detect, runner, pending, maxChars = 500 } = deps;
+  const { chatStore, modelManager, detect, runner, pending, settings, maxChars = MAX_CHARS } = deps;
   const id = chat.id;
   // Restored on failure so a failed final save leaves no answer and the old session.
   const before = { count: chat.messages.length, sessionId: chat.sessionId, lang: chat.lang };
   try {
     pending.set(id, 'translating');
-    const translator = modelManager.translator();
+    // Every call goes through the manager's queue, so a size switch during
+    // this turn is picked up by the calls that run after it.
+    const translator = { translate: (text, src, tgt) => modelManager.translate(text, src, tgt) };
     const detected = detect(message.original);
     const supported = detected.kind !== 'unsupported';
     let lang = null;
@@ -61,7 +64,8 @@ export async function runTurn(deps, chat, message) {
     message.english = english;
 
     pending.set(id, 'thinking');
-    const answer = await runner.run({ prompt: english, sessionId: chat.sessionId ?? null });
+    const model = settings?.get().claudeModel ?? 'default';
+    const answer = await runner.run({ prompt: english, sessionId: chat.sessionId ?? null, model });
 
     // Back to this message's language; English and unsupported are shown as is.
     let shown = answer.text;

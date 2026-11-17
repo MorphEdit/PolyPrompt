@@ -24,11 +24,11 @@ function captureWarn(t) {
 }
 
 const userMsg = (id, extra = {}) => ({
-  id, role: 'user', original: 'สวัสดี', english: 'Hello', lang: 'tha_Thai',
+  id, role: 'user', original: 'สวัสดี', english: 'Hello', lang: 'th',
   createdAt: '2026-01-01T00:00:00.000Z', ...extra,
 });
 const assistantMsg = (id) => ({
-  id, role: 'assistant', original: 'สวัสดีครับ', english: 'Hello there', lang: 'tha_Thai',
+  id, role: 'assistant', original: 'สวัสดีครับ', english: 'Hello there', lang: 'th',
   createdAt: '2026-01-01T00:00:01.000Z',
 });
 
@@ -64,7 +64,7 @@ test('create → save → get round-trips the exact file shape', async (t) => {
   const chat = await store.create('สวัสดี');
   const createdAt = chat.createdAt;
   chat.sessionId = 'sess-1';
-  chat.lang = 'tha_Thai';
+  chat.lang = 'th';
   chat.messages.push(userMsg('m1'), { ...assistantMsg('m2'), note: 'หมายเหตุ' });
   chat.messages.push(userMsg('m3', { error: { kind: 'timeout', message: 'หมดเวลา' } }));
   const before = chat.updatedAt;
@@ -160,4 +160,42 @@ test('markInterrupted fails only chats ending in a user message without error', 
   assert.deepEqual(got.messages.slice(0, 2), cut.messages.slice(0, 2));
   for (const [id, text] of Object.entries(untouched)) assert.equal(await raw(id), text);
   assert.deepEqual(await store.markInterrupted(), []);
+});
+
+test('old chats with NLLB codes load with ISO codes; the mapped values are written on the next save', async (t) => {
+  const dir = await tempDir(t);
+  const id = '11111111-2222-4333-8444-555555555555';
+  const old = {
+    id, title: 'old', createdAt: 'x', updatedAt: 'x', sessionId: 's1', lang: 'tha_Thai',
+    messages: [
+      { id: 'm1', role: 'user', original: 'สวัสดี', english: 'Hello', lang: 'tha_Thai', createdAt: 'x' },
+      { id: 'm2', role: 'assistant', original: 'ครับ', english: 'Yes', lang: 'tha_Thai', createdAt: 'x' },
+      { id: 'm3', role: 'user', original: 'ok', english: 'ok', lang: 'eng_Latn', createdAt: 'x' },
+      { id: 'm4', role: 'user', original: 'x', english: 'x', lang: null, createdAt: 'x' },
+      { id: 'm5', role: 'user', original: 'x', english: 'x', lang: 'th', createdAt: 'x' },
+    ],
+  };
+  await writeFile(path.join(dir, id + '.json'), JSON.stringify(old));
+  const store = createChatStore({ dir, now: clock() });
+  const chat = await store.get(id);
+  assert.equal(chat.lang, 'th');
+  assert.deepEqual(chat.messages.map((m) => m.lang), ['th', 'th', 'en', null, 'th']);
+  const onDisk = () => readFile(path.join(dir, id + '.json'), 'utf8').then(JSON.parse);
+  assert.equal((await onDisk()).lang, 'tha_Thai', 'not written on read');
+  await store.save(chat);
+  const saved = await onDisk();
+  assert.equal(saved.lang, 'th');
+  assert.deepEqual(saved.messages.map((m) => m.lang), ['th', 'th', 'en', null, 'th']);
+});
+
+test('an old chat language that is now unsupported becomes null; message langs keep the ISO code', async (t) => {
+  const dir = await tempDir(t);
+  const id = '11111111-2222-4333-8444-666666666666';
+  await writeFile(path.join(dir, id + '.json'), JSON.stringify({
+    id, title: 'old', sessionId: null, lang: 'amh_Ethi',
+    messages: [{ id: 'm1', role: 'user', original: 'x', english: 'x', lang: 'amh_Ethi', createdAt: 'x' }],
+  }));
+  const chat = await createChatStore({ dir }).get(id);
+  assert.equal(chat.lang, null);
+  assert.equal(chat.messages[0].lang, 'am');
 });

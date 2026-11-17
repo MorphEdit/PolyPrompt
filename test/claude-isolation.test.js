@@ -77,3 +77,38 @@ test('Windows: plain .cmd shim passes the system prompt intact', { skip: !win },
   const { argv } = readLog(log);
   assert.equal(argv[argv.indexOf('--system-prompt') + 1], SYSTEM_PROMPT);
 });
+
+test('--model is passed only when the setting is not "default"; resume, tools, MCP, prompt and cwd stay', async () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'polyprompt-model-'));
+  const home = path.join(base, 'claude-home');
+  try {
+    const runner = createClaudeRunner({ command: fx('ok.mjs'), cwd: home });
+    for (const model of [undefined, 'default', 'unknown']) {
+      const log = logFile();
+      await runner.run({ prompt: 'a', sessionId: 's1', model });
+      const { argv } = readLog(log);
+      assert.ok(!argv.includes('--model'), String(model));
+    }
+    for (const model of ['opus', 'sonnet', 'haiku']) {
+      const log = logFile();
+      await runner.run({ prompt: 'a', sessionId: 's1', model });
+      const { argv, cwd } = readLog(log);
+      assert.equal(argv[argv.indexOf('--model') + 1], model);
+      assert.equal(argv.filter((a) => a === '--model').length, 1);
+      assert.equal(argv[argv.indexOf('--resume') + 1], 's1');
+      assert.equal(argv[argv.indexOf('--tools') + 1], '');
+      assert.ok(argv.includes('--strict-mcp-config'));
+      assert.equal(argv[argv.indexOf('--system-prompt') + 1], SYSTEM_PROMPT);
+      assert.equal(path.resolve(cwd), path.resolve(home));
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('Windows: plain .cmd shim passes --model', { skip: !win }, async () => {
+  const log = logFile();
+  await createClaudeRunner({ command: fx('ok-plain.cmd') }).run({ prompt: 'a', sessionId: 's1', model: 'haiku' });
+  const { argv } = readLog(log);
+  assert.equal(argv[argv.indexOf('--model') + 1], 'haiku');
+});

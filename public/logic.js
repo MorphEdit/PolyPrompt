@@ -168,3 +168,57 @@ export function renderMarkdown(src) {
   }
   return out.join('\n');
 }
+
+// ---- model picker ----
+
+export const SIZE_OPTIONS = [
+  { value: '4b', label: '4B', bytes: 2_489_909_760, hint: 'เร็ว เหมาะกับเครื่องส่วนใหญ่' },
+  { value: '12b', label: '12B', bytes: 7_300_794_112, hint: 'แปลดีขึ้น ช้าลง ต้องใช้ RAM/การ์ดจอมากขึ้น' },
+  { value: '27b', label: '27B', bytes: 16_546_704_480, hint: 'แปลดีที่สุด ช้ามาก ต้องใช้ RAM มาก' },
+];
+
+export const CLAUDE_OPTIONS = [
+  { value: 'default', label: 'ค่าเริ่มต้น', hint: 'ใช้โมเดลที่ Claude Code ตั้งไว้' },
+  { value: 'opus', label: 'Opus', hint: 'ฉลาดที่สุด ใช้โควตามากที่สุด' },
+  { value: 'sonnet', label: 'Sonnet', hint: 'สมดุลระหว่างความฉลาดและความเร็ว' },
+  { value: 'haiku', label: 'Haiku', hint: 'เร็วที่สุด ประหยัดโควตา' },
+];
+
+const optionOf = (options, value) => options.find((o) => o.value === value) ?? options[0];
+
+// "7.3 GB" (one decimal, decimal gigabytes).
+export function formatGB(bytes) {
+  return `${(Math.round(bytes / 1e8) / 10).toFixed(1)} GB`;
+}
+
+// Text of the picker button, e.g. "แปล 4B · Claude ค่าเริ่มต้น".
+export function pickerLabel({ translatorSize, claudeModel } = {}) {
+  return `แปล ${optionOf(SIZE_OPTIONS, translatorSize).label} · Claude ${optionOf(CLAUDE_OPTIONS, claudeModel).label}`;
+}
+
+// The whole picker waits while the open chat's reply is pending.
+export function pickerDisabled({ pending }) {
+  return !!pending;
+}
+
+// Size picks are refused while a size download or any model load runs; they
+// stay available in the error state.
+export function sizeOptionsDisabled({ pending, modelState, switchState }) {
+  return !!pending || modelState === 'loading' || switchState === 'downloading';
+}
+
+// What picking `size` should do: 'none' (already loaded), 'confirm' (needs a
+// download: ask first with confirmDownloadText) or 'switch'.
+export function sizePickAction({ size, model, downloadedSizes = [] }) {
+  if (model?.state === 'ready' && model.size === size) return 'none';
+  return downloadedSizes.includes(size) ? 'switch' : 'confirm';
+}
+
+export function confirmDownloadText(size) {
+  return `ดาวน์โหลด ${formatGB(optionOf(SIZE_OPTIONS, size).bytes)}?`;
+}
+
+// "ดาวน์โหลดแล้ว" or the download size.
+export function sizeOptionNote(size, downloadedSizes = []) {
+  return downloadedSizes.includes(size) ? 'ดาวน์โหลดแล้ว' : formatGB(optionOf(SIZE_OPTIONS, size).bytes);
+}

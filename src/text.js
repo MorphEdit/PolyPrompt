@@ -85,7 +85,7 @@ export function protect(text) {
 // Markdown structure that never goes to the translator: the line prefix
 // (indent, quote, heading, list marker, task box) and inline markers
 // (emphasis, strike, table pipes, link brackets). Placeholders for protected
-// spans are split out too: NLLB drops or mangles them (⟦0⟧ -> 0).
+// spans are split out too: translators drop or mangle them (⟦0⟧ -> 0).
 const LINE_BREAK = /(\r?\n)/;
 const LINE_PREFIX = /^[^\S\n]*(?:>[^\S\n]?)*(?:#{1,6}(?=\s|$)|(?:[-*+]|\d+[.)])(?=\s)(?:\s+\[[ xX]\](?=\s))?)?[^\S\n]*/;
 const INLINE_MARKER = /(⟦\d+⟧|\*+|~~|(?<![\p{L}\p{N}_])_+|_+(?![\p{L}\p{N}_])|\||!?\[|\]\([^)\s]*\))/u;
@@ -147,7 +147,7 @@ async function translateRun(translator, run, srcLang, tgtLang, maxChars) {
 
 // Translate line by line: Markdown prefixes and inline markers are kept as-is
 // and only the plain-text runs between them go to the translator.
-export async function translateText(translator, text, srcLang, tgtLang, { maxChars = 500 } = {}) {
+export async function translateText(translator, text, srcLang, tgtLang, { maxChars = 2000 } = {}) {
   const { text: safe, restore } = protect(text);
   let out = '';
   for (const [i, line] of safe.split(LINE_BREAK).entries()) {

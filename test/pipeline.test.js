@@ -34,7 +34,7 @@ function fakeDetect(table = {}) {
   const calls = [];
   const detect = (text) => {
     calls.push(text);
-    if (!Object.hasOwn(table, text)) return { kind: 'ok', lang: 'eng_Latn' };
+    if (!Object.hasOwn(table, text)) return { kind: 'ok', lang: 'en' };
     if (!table[text]) throw new Error('detector broke');
     return table[text];
   };
@@ -115,29 +115,29 @@ async function setup(t, { ready = true, table } = {}) {
   return { api, dir, chatStore, modelManager, loader, translator, detector, runner, pending };
 }
 
-const THAI = { 'สวัสดี': { kind: 'ok', lang: 'tha_Thai' }, 'ok': { kind: 'unsure', lang: null },
-  'Bonjour tout le monde': { kind: 'ok', lang: 'fra_Latn' }, 'Sawubona': { kind: 'unsupported', lang: null } };
+const THAI = { 'สวัสดี': { kind: 'ok', lang: 'th' }, 'ok': { kind: 'unsure', lang: null },
+  'Bonjour tout le monde': { kind: 'ok', lang: 'fr' }, 'Sawubona': { kind: 'unsupported', lang: null } };
 
 test('Thai message is translated to English, sent to Claude, and translated back', async (t) => {
   const { api, translator, runner } = await setup(t, { table: THAI });
   const { chatId, messageId, chat } = await api.turn({ text: 'สวัสดี' });
-  assert.deepEqual(translator.calls[0], ['สวัสดี', 'tha_Thai', 'eng_Latn']);
+  assert.deepEqual(translator.calls[0], ['สวัสดี', 'th', 'en']);
   assert.equal(runner.calls.length, 1);
-  assert.equal(runner.calls[0].prompt, '<eng_Latn>สวัสดี');
+  assert.equal(runner.calls[0].prompt, '<en>สวัสดี');
   assert.equal(runner.calls[0].sessionId, null);
-  assert.deepEqual(translator.calls[1], ['Answer to: <eng_Latn>สวัสดี', 'eng_Latn', 'tha_Thai']);
+  assert.deepEqual(translator.calls[1], ['Answer to: <en>สวัสดี', 'en', 'th']);
   assert.equal(chat.id, chatId);
-  assert.equal(chat.lang, 'tha_Thai');
+  assert.equal(chat.lang, 'th');
   assert.equal(chat.sessionId, 's1');
   assert.equal(chat.messages.length, 2);
   const [u, a] = chat.messages;
   assert.equal(u.id, messageId);
-  assert.deepEqual([u.role, u.original, u.english, u.lang], ['user', 'สวัสดี', '<eng_Latn>สวัสดี', 'tha_Thai']);
+  assert.deepEqual([u.role, u.original, u.english, u.lang], ['user', 'สวัสดี', '<en>สวัสดี', 'th']);
   assert.equal(u.error, undefined);
   assert.equal(a.role, 'assistant');
-  assert.equal(a.english, 'Answer to: <eng_Latn>สวัสดี');
-  assert.equal(a.original, '<tha_Thai>Answer to: <eng_Latn>สวัสดี');
-  assert.equal(a.lang, 'tha_Thai');
+  assert.equal(a.english, 'Answer to: <en>สวัสดี');
+  assert.equal(a.original, '<th>Answer to: <en>สวัสดี');
+  assert.equal(a.lang, 'th');
   assert.equal(a.note, undefined);
 });
 
@@ -147,9 +147,9 @@ test('English message: translator never called, answer shown untranslated', asyn
   assert.equal(translator.calls.length, 0);
   assert.equal(runner.calls[0].prompt, 'Hello there');
   const [u, a] = chat.messages;
-  assert.deepEqual([u.english, u.lang], ['Hello there', 'eng_Latn']);
-  assert.deepEqual([a.original, a.english, a.lang], ['Answer to: Hello there', 'Answer to: Hello there', 'eng_Latn']);
-  assert.equal(chat.lang, 'eng_Latn');
+  assert.deepEqual([u.english, u.lang], ['Hello there', 'en']);
+  assert.deepEqual([a.original, a.english, a.lang], ['Answer to: Hello there', 'Answer to: Hello there', 'en']);
+  assert.equal(chat.lang, 'en');
 });
 
 test('code blocks, inline code and URLs survive back-translation unchanged', async (t) => {
@@ -161,7 +161,7 @@ test('code blocks, inline code and URLs survive back-translation unchanged', asy
   assert.ok(shown.includes(fence));
   assert.ok(shown.includes('`npm start`'));
   assert.ok(shown.includes('https://example.com/a?b=1'));
-  assert.ok(shown.includes('<tha_Thai>'));
+  assert.ok(shown.includes('<th>'));
 });
 
 test('second message resumes the stored session; stored id follows the runner', async (t) => {
@@ -194,7 +194,7 @@ test('model not ready: send and retry are 503', async (t) => {
   const { api, chatStore, detector, runner } = await setup(t, { ready: false });
   assert.equal((await api.send({ text: 'Hello' })).status, 503);
   const chat = await chatStore.create('x');
-  chat.messages.push({ id: 'm1', role: 'user', original: 'x', english: 'x', lang: 'eng_Latn',
+  chat.messages.push({ id: 'm1', role: 'user', original: 'x', english: 'x', lang: 'en',
     error: { kind: 'failed', message: 'x' }, createdAt: new Date().toISOString() });
   await chatStore.save(chat);
   assert.equal((await api.retry(chat.id, 'm1')).status, 503);
@@ -347,9 +347,9 @@ test('retry re-runs the same message; on success the error is gone and the answe
   assert.equal(chat.messages[0].id, messageId);
   assert.equal(chat.messages[0].error, undefined);
   assert.equal(chat.messages[1].role, 'assistant');
-  assert.equal(chat.messages[1].original, '<tha_Thai>Answer to: <eng_Latn>สวัสดี');
+  assert.equal(chat.messages[1].original, '<th>Answer to: <en>สวัสดี');
   assert.equal(detector.calls.length, 2);
-  assert.deepEqual(translator.calls[0], ['สวัสดี', 'tha_Thai', 'eng_Latn']);
+  assert.deepEqual(translator.calls[0], ['สวัสดี', 'th', 'en']);
   assert.equal(runner.calls.length, 2);
   assert.equal(chat.sessionId, 's2');
 });
@@ -405,26 +405,26 @@ test('unsure detection uses the chat lang, or English when none, and keeps the c
   // New chat, unsure: English, no translation, chat lang stays null.
   const fresh = await api.turn({ text: 'ok' });
   assert.equal(translator.calls.length, 0);
-  assert.equal(fresh.chat.messages[0].lang, 'eng_Latn');
+  assert.equal(fresh.chat.messages[0].lang, 'en');
   assert.equal(fresh.chat.lang, null);
 
   const { chatId } = await api.turn({ text: 'สวัสดี' });
   translator.calls.length = 0;
   const { chat } = await api.turn({ chatId, text: 'ok' });
-  assert.deepEqual(translator.calls[0], ['ok', 'tha_Thai', 'eng_Latn']);
-  assert.equal(translator.calls[1][2], 'tha_Thai');
-  assert.equal(chat.messages[2].lang, 'tha_Thai');
-  assert.equal(chat.messages[3].lang, 'tha_Thai');
-  assert.equal(chat.lang, 'tha_Thai');
+  assert.deepEqual(translator.calls[0], ['ok', 'th', 'en']);
+  assert.equal(translator.calls[1][2], 'th');
+  assert.equal(chat.messages[2].lang, 'th');
+  assert.equal(chat.messages[3].lang, 'th');
+  assert.equal(chat.lang, 'th');
 
   // Switching to another confident language answers in it and updates the chat.
   translator.calls.length = 0;
   const switched = await api.turn({ chatId, text: 'Bonjour tout le monde' });
-  assert.deepEqual(translator.calls[0], ['Bonjour tout le monde', 'fra_Latn', 'eng_Latn']);
-  assert.equal(translator.calls[1][2], 'fra_Latn');
-  assert.equal(switched.chat.messages[5].lang, 'fra_Latn');
-  assert.equal(switched.chat.lang, 'fra_Latn');
-  assert.equal(runner.calls.at(-1).prompt, '<eng_Latn>Bonjour tout le monde');
+  assert.deepEqual(translator.calls[0], ['Bonjour tout le monde', 'fr', 'en']);
+  assert.equal(translator.calls[1][2], 'fr');
+  assert.equal(switched.chat.messages[5].lang, 'fr');
+  assert.equal(switched.chat.lang, 'fr');
+  assert.equal(runner.calls.at(-1).prompt, '<en>Bonjour tout le monde');
 });
 
 test('unsupported language: sent as typed, English answer with a Thai note, chat lang unchanged', async (t) => {
@@ -436,9 +436,9 @@ test('unsupported language: sent as typed, English answer with a Thai note, chat
   assert.equal(runner.calls.at(-1).prompt, 'Sawubona');
   const [u, a] = chat.messages.slice(2);
   assert.deepEqual([u.lang, u.english, u.original], [null, 'Sawubona', 'Sawubona']);
-  assert.equal(a.lang, 'eng_Latn');
+  assert.equal(a.lang, 'en');
   assert.equal(a.english, 'Answer to: Sawubona');
   assert.equal(a.original, a.english);
   assert.equal(a.note, UNSUPPORTED_NOTE);
-  assert.equal(chat.lang, 'tha_Thai');
+  assert.equal(chat.lang, 'th');
 });
