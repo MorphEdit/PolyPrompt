@@ -1,6 +1,7 @@
 import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
-  retryEnabled, lastMessageHasError, renderMarkdown,
+  retryEnabled, lastMessageHasError, renderMarkdown, SIZE_OPTIONS, CLAUDE_OPTIONS, formatGB,
+  pickerLabel, pickerDisabled, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
 } from './logic.js';
 
 const POLL_MS = 1000;
@@ -10,6 +11,9 @@ const els = {
   newChat: $('new-chat'),
   chatList: $('chat-list'),
   modelBanner: $('model-banner'),
+  switchBanner: $('switch-banner'),
+  picker: $('picker'),
+  pickerMenu: $('picker-menu'),
   errorBanner: $('error-banner'),
   messages: $('messages'),
   statusLine: $('status-line'),
@@ -19,7 +23,10 @@ const els = {
 };
 
 const state = {
-  model: { state: 'loading', progress: 0, error: null },
+  model: { state: 'loading', progress: 0, error: null, size: '4b' },
+  switch: null, // background download of another translator size, or a failed one
+  settings: null, // { translatorSize, claudeModel, downloadedSizes }
+  pickerError: null,
   chats: [],
   chat: null, // the open chat (with pendingStep), or null for a new chat
   busy: false, // a send/retry request is in flight
@@ -68,6 +75,7 @@ function updateComposer() {
   // The model state can change without a re-render of the chat (status poll),
   // so the retry button's state is kept in sync here too.
   if (retryButton) retryButton.disabled = !retryEnabled({ pending: isPending(), modelState: state.model.state });
+  renderPicker();
   const step = state.chat?.pendingStep;
   const label = step != null ? stepLabel(step) : state.busy ? 'กำลังส่ง…' : '';
   els.statusLine.textContent = label;
@@ -84,7 +92,8 @@ function renderModel() {
   b.classList.toggle('banner-error', s === 'error');
   if (s === 'loading') {
     const text = document.createElement('span');
-    text.textContent = `กำลังโหลดโมเดลแปลภาษา… ${formatProgress(progress)} (ครั้งแรกจะดาวน์โหลดประมาณ 1 GB)`;
+    const size = SIZE_OPTIONS.find((o) => o.value === state.model.size) ?? SIZE_OPTIONS[0];
+    text.textContent = `กำลังโหลดโมเดลแปลภาษา ${size.label}… ${formatProgress(progress)} (ครั้งแรกจะดาวน์โหลดประมาณ ${formatGB(size.bytes)})`;
     const bar = document.createElement('div');
     bar.className = 'progress';
     const fill = document.createElement('div');
@@ -93,26 +102,161 @@ function renderModel() {
     b.append(text, bar);
   } else if (s === 'error') {
     const text = document.createElement('span');
-    text.textContent = `โหลดโมเดลแปลภาษาไม่สำเร็จ: ${error ?? ''}`;
+    text.textContent = error || 'โหลดโมเดลแปลภาษาไม่สำเร็จ';
     const retry = document.createElement('button');
     retry.type = 'button';
     retry.textContent = 'ลองใหม่';
     retry.addEventListener('click', retryModel);
     b.append(text, retry);
   }
+  renderSwitch();
   updateComposer();
+}
+
+// Progress of a background download of another translator size.
+function renderSwitch() {
+  const sw = state.switch;
+  const b = els.switchBanner;
+  b.replaceChildren();
+  b.hidden = sw?.state !== 'downloading';
+  if (b.hidden) return;
+  const size = SIZE_OPTIONS.find((o) => o.value === sw.size);
+  const text = document.createElement('span');
+  text.textContent = `กำลังดาวน์โหลดโมเดลแปลภาษา ${size?.label ?? sw.size}… ${formatProgress(sw.progress)} (ใช้ตัวแปลเดิมไปก่อนได้)`;
+  const bar = document.createElement('div');
+  bar.className = 'progress';
+  const fill = document.createElement('div');
+  fill.style.width = formatProgress(sw.progress);
+  bar.append(fill);
+  b.append(text, bar);
 }
 
 async function loadStatus() {
   clearTimeout(statusPollTimer);
+  const before = `${state.model.state}/${state.model.size}/${state.switch?.state}`;
   try {
-    const { model } = await api('GET', '/api/status');
-    state.model = model;
+    const status = await api('GET', '/api/status');
+    state.model = status.model;
+    state.switch = status.switch ?? null;
     renderModel();
   } catch (err) {
     showError(err);
   }
-  if (state.model.state !== 'ready') statusPollTimer = setTimeout(loadStatus, POLL_MS);
+  // A finished load or download changes the saved size and downloaded sizes.
+  if (before !== `${state.model.state}/${state.model.size}/${state.switch?.state}`) loadSettings();
+  if (state.model.state !== 'ready' || state.switch?.state === 'downloading') {
+    statusPollTimer = setTimeout(loadStatus, POLL_MS);
+  }
+}
+
+// ---- model picker ----
+
+async function loadSettings() {
+  try {
+    state.settings = await api('GET', '/api/settings');
+    renderPicker();
+  } catch (err) {
+    showError(err);
+  }
+}
+
+function pickerOption({ name, hint, note, selected, disabled, onPick }) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'picker-option';
+  b.classList.toggle('selected', selected);
+  b.disabled = disabled;
+  const n = document.createElement('span');
+  n.className = 'picker-name';
+  n.textContent = note ? `${name} · ${note}` : name;
+  const h = document.createElement('span');
+  h.className = 'picker-hint';
+  h.textContent = hint;
+  b.append(n, h);
+  b.addEventListener('click', onPick);
+  return b;
+}
+
+function sectionTitle(text) {
+  const t = document.createElement('div');
+  t.className = 'picker-section';
+  t.textContent = text;
+  return t;
+}
+
+function renderPicker() {
+  const settings = state.settings;
+  const disabled = !settings || pickerDisabled({ pending: isPending() });
+  els.picker.disabled = disabled;
+  els.picker.textContent = settings ? pickerLabel(settings) : 'โมเดล';
+  if (disabled) closePicker();
+  if (!settings) return;
+  const sizesOff = sizeOptionsDisabled({
+    pending: isPending(), modelState: state.model.state, switchState: state.switch?.state,
+  });
+  const loaded = state.model.state === 'ready' ? state.model.size : settings.translatorSize;
+  const items = [sectionTitle('ตัวแปลภาษา')];
+  for (const o of SIZE_OPTIONS) {
+    items.push(pickerOption({
+      name: o.label,
+      hint: o.hint,
+      note: sizeOptionNote(o.value, settings.downloadedSizes),
+      selected: o.value === loaded,
+      disabled: sizesOff,
+      onPick: () => pickSize(o.value),
+    }));
+  }
+  const error = state.pickerError ?? (state.switch?.state === 'failed' ? state.switch.error : null);
+  if (error) {
+    const e = document.createElement('div');
+    e.className = 'picker-error';
+    e.textContent = error;
+    items.push(e);
+  }
+  items.push(sectionTitle('Claude'));
+  for (const o of CLAUDE_OPTIONS) {
+    items.push(pickerOption({
+      name: o.label,
+      hint: o.hint,
+      selected: o.value === settings.claudeModel,
+      disabled: false,
+      onPick: () => saveSettings({ claudeModel: o.value }),
+    }));
+  }
+  els.pickerMenu.replaceChildren(...items);
+}
+
+function closePicker() {
+  els.pickerMenu.hidden = true;
+  els.picker.setAttribute('aria-expanded', 'false');
+}
+
+function togglePicker() {
+  if (els.picker.disabled) return;
+  const open = els.pickerMenu.hidden;
+  els.pickerMenu.hidden = !open;
+  els.picker.setAttribute('aria-expanded', String(open));
+}
+
+async function saveSettings(patch) {
+  closePicker();
+  state.pickerError = null;
+  try {
+    state.settings = await api('PUT', '/api/settings', patch);
+  } catch (err) {
+    state.pickerError = err.status === 409
+      ? 'กำลังเปลี่ยนโมเดลแปลภาษาอยู่ กรุณารอสักครู่'
+      : err.message;
+  }
+  renderPicker();
+  if (patch.translatorSize) loadStatus();
+}
+
+function pickSize(size) {
+  const action = sizePickAction({ size, model: state.model, downloadedSizes: state.settings?.downloadedSizes });
+  if (action === 'none') return closePicker();
+  if (action === 'confirm' && !confirm(confirmDownloadText(size))) return closePicker();
+  saveSettings({ translatorSize: size });
 }
 
 async function retryModel() {
@@ -340,6 +484,7 @@ function autoGrow() {
 }
 
 els.newChat.addEventListener('click', newChat);
+els.picker.addEventListener('click', togglePicker);
 els.composer.addEventListener('submit', (e) => {
   e.preventDefault();
   send();
@@ -359,4 +504,5 @@ els.input.addEventListener('input', () => {
 renderChat();
 renderModel();
 loadStatus();
+loadSettings();
 loadChats();

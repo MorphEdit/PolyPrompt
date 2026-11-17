@@ -29,17 +29,17 @@ test('GET /api/status reports loading progress, then ready', async (t) => {
   const { loader, port } = await startApp(t);
   let r = await request(port, 'GET', '/api/status');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { model: { state: 'loading', progress: 0, error: null } });
+  assert.deepEqual(r.json, { model: { state: 'loading', progress: 0, error: null, size: '4b' }, switch: null });
   loader.calls[0].onProgress(0.25);
   r = await request(port, 'GET', '/api/status');
-  assert.deepEqual(r.json, { model: { state: 'loading', progress: 0.25, error: null } });
+  assert.deepEqual(r.json, { model: { state: 'loading', progress: 0.25, error: null, size: '4b' }, switch: null });
   loader.calls[0].onProgress(0.75);
   r = await request(port, 'GET', '/api/status');
   assert.equal(r.json.model.progress, 0.75);
   loader.calls[0].resolve({ translate: async (s) => s });
   await tick();
   r = await request(port, 'GET', '/api/status');
-  assert.deepEqual(r.json, { model: { state: 'ready', progress: 1, error: null } });
+  assert.deepEqual(r.json, { model: { state: 'ready', progress: 1, error: null, size: '4b' }, switch: null });
 });
 
 test('load failure gives error, server keeps answering, retry restarts loading', async (t) => {
@@ -48,7 +48,7 @@ test('load failure gives error, server keeps answering, retry restarts loading',
   await tick();
   let r = await request(port, 'GET', '/api/status');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { model: { state: 'error', progress: 0, error: 'download failed' } });
+  assert.deepEqual(r.json, { model: { state: 'error', progress: 0, error: 'โหลดโมเดลแปลภาษา 4B ไม่สำเร็จ: download failed', size: '4b' }, switch: null });
 
   r = await request(port, 'POST', '/api/model/retry');
   assert.equal(r.status, 202);
@@ -74,7 +74,7 @@ test('retry while loading is a no-op', async (t) => {
   assert.equal(r.status, 202);
   assert.equal(loader.calls.length, 1);
   assert.deepEqual((await request(port, 'GET', '/api/status')).json.model,
-    { state: 'loading', progress: 0.5, error: null });
+    { state: 'loading', progress: 0.5, error: null, size: '4b' });
 });
 
 test('unknown /api routes return 404 JSON', async (t) => {

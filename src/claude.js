@@ -40,7 +40,11 @@ export class ClaudeError extends Error {
   }
 }
 
-export function buildArgs(sessionId) {
+// Claude models the picker offers; 'default' (or anything else) adds no
+// --model flag, so Claude Code uses its own default.
+export const MODEL_FLAGS = ['opus', 'sonnet', 'haiku'];
+
+export function buildArgs(sessionId, model = 'default') {
   // `--tools ""` is the strictest option in `claude --help`: it removes every
   // built-in tool, unlike --disallowedTools which only blocks listed names.
   // --strict-mcp-config without --mcp-config also loads no MCP server tools.
@@ -49,6 +53,7 @@ export function buildArgs(sessionId) {
     '-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config',
     '--setting-sources', 'user', '--system-prompt', SYSTEM_PROMPT,
   ];
+  if (MODEL_FLAGS.includes(model)) args.push('--model', model);
   if (sessionId) args.push('--resume', sessionId);
   return args;
 }
@@ -116,11 +121,11 @@ function parseResult(stdout) {
 }
 
 export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd = defaultClaudeHome() } = {}) {
-  function run({ prompt, sessionId } = {}) {
+  function run({ prompt, sessionId, model } = {}) {
     return new Promise((resolve, reject) => {
       let target;
       try {
-        target = resolveCommand(command, buildArgs(sessionId));
+        target = resolveCommand(command, buildArgs(sessionId, model));
         mkdirSync(cwd, { recursive: true });
       } catch (err) {
         return reject(err instanceof ClaudeError ? err : new ClaudeError('failed', err.message));

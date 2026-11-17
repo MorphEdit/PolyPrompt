@@ -15,11 +15,16 @@
   </aside>
   <main class="main">
     <div id="model-banner" class="banner" hidden></div>
+    <div id="switch-banner" class="banner" hidden></div>
     <div id="error-banner" class="banner banner-error" hidden></div>
     <section id="messages" class="messages" aria-live="polite"></section>
     <div id="status-line" class="status-line" hidden></div>
     <form id="composer" class="composer">
       <textarea id="input" rows="1" placeholder="พิมพ์ข้อความเป็นภาษาใดก็ได้… (Enter เพื่อส่ง, Shift+Enter ขึ้นบรรทัดใหม่)"></textarea>
+      <div class="picker">
+        <button id="picker" class="picker-button" type="button" aria-haspopup="true" aria-expanded="false"></button>
+        <div id="picker-menu" class="picker-menu" hidden></div>
+      </div>
       <button id="send" type="submit" disabled>ส่ง</button>
     </form>
   </main>

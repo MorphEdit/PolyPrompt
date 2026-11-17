@@ -5,7 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
-  retryEnabled, lastMessageHasError, escapeHtml, renderMarkdown,
+  retryEnabled, lastMessageHasError, escapeHtml, renderMarkdown, SIZE_OPTIONS, CLAUDE_OPTIONS, formatGB,
+  pickerLabel, pickerDisabled, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
 } from '../public/logic.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -187,4 +188,51 @@ test('retryEnabled: only when no reply is pending and the model is ready', () =>
   assert.equal(retryEnabled({ pending: true, modelState: 'ready' }), false);
   assert.equal(retryEnabled({ pending: false, modelState: 'loading' }), false);
   assert.equal(retryEnabled({ pending: false, modelState: 'error' }), false);
+});
+
+test('picker label shows both current choices', () => {
+  assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'default' }), 'แปล 4B · Claude ค่าเริ่มต้น');
+  assert.equal(pickerLabel({ translatorSize: '27b', claudeModel: 'opus' }), 'แปล 27B · Claude Opus');
+});
+
+test('picker options: three sizes with hints, four Claude models', () => {
+  assert.deepEqual(SIZE_OPTIONS.map((o) => o.value), ['4b', '12b', '27b']);
+  assert.equal(SIZE_OPTIONS[0].hint, 'เร็ว เหมาะกับเครื่องส่วนใหญ่');
+  assert.equal(SIZE_OPTIONS[1].hint, 'แปลดีขึ้น ช้าลง ต้องใช้ RAM/การ์ดจอมากขึ้น');
+  assert.equal(SIZE_OPTIONS[2].hint, 'แปลดีที่สุด ช้ามาก ต้องใช้ RAM มาก');
+  assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.value), ['default', 'opus', 'sonnet', 'haiku']);
+  for (const o of CLAUDE_OPTIONS) assert.match(o.hint, /[฀-๿]/);
+  assert.equal(CLAUDE_OPTIONS[1].hint, 'ฉลาดที่สุด ใช้โควตามากที่สุด');
+  assert.equal(CLAUDE_OPTIONS[3].hint, 'เร็วที่สุด ประหยัดโควตา');
+});
+
+test('size notes and the download confirmation show the size', () => {
+  assert.equal(sizeOptionNote('4b', ['4b']), 'ดาวน์โหลดแล้ว');
+  assert.equal(sizeOptionNote('12b', ['4b']), '7.3 GB');
+  assert.equal(sizeOptionNote('27b', []), '16.5 GB');
+  assert.equal(confirmDownloadText('12b'), 'ดาวน์โหลด 7.3 GB?');
+  assert.equal(formatGB(2_489_909_760), '2.5 GB');
+});
+
+test('the picker is disabled while the current chat reply is pending', () => {
+  assert.equal(pickerDisabled({ pending: true }), true);
+  assert.equal(pickerDisabled({ pending: false }), false);
+});
+
+test('size options are disabled while a size download or a load runs, enabled in the error state', () => {
+  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'ready', switchState: undefined }), false);
+  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'ready', switchState: 'failed' }), false);
+  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'error' }), false);
+  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'loading' }), true);
+  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'ready', switchState: 'downloading' }), true);
+  assert.equal(sizeOptionsDisabled({ pending: true, modelState: 'ready' }), true);
+});
+
+test('picking a size: loaded does nothing, downloaded switches, missing asks first', () => {
+  const model = { state: 'ready', size: '4b' };
+  assert.equal(sizePickAction({ size: '4b', model, downloadedSizes: ['4b'] }), 'none');
+  assert.equal(sizePickAction({ size: '12b', model, downloadedSizes: ['4b', '12b'] }), 'switch');
+  assert.equal(sizePickAction({ size: '27b', model, downloadedSizes: ['4b'] }), 'confirm');
+  // In the error state the saved size can be picked again.
+  assert.equal(sizePickAction({ size: '4b', model: { state: 'error', size: '4b' }, downloadedSizes: ['4b'] }), 'switch');
 });

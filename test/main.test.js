@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,8 @@ async function tempDir(t) {
 }
 
 test('entry point prints the 127.0.0.1 URL and serves before the model is ready', { timeout: 10000 }, async (t) => {
-  const chatsDir = await tempDir(t);
+  // Chats in a subfolder so the default settings file lands in this temp dir.
+  const chatsDir = path.join(await tempDir(t), 'chats');
   const child = spawn(process.execPath, [path.join(root, 'src', 'main.js')], {
     // Offline with an empty cache: the real loader must never download in tests.
     env: {
@@ -47,7 +49,8 @@ test('entry point prints the 127.0.0.1 URL and serves before the model is ready'
 
 test('start() listens on 127.0.0.1 only', async (t) => {
   const { start } = await import('../src/main.js');
-  const server = await start({ port: 0, load: () => new Promise(() => {}), chatsDir: await tempDir(t) });
+  const dir = await tempDir(t);
+  const server = await start({ port: 0, load: () => new Promise(() => {}), chatsDir: dir, settingsFile: path.join(dir, 'settings.json') });
   t.after(() => server.close());
   assert.equal(server.address().address, '127.0.0.1');
 });
@@ -57,13 +60,65 @@ test('start() marks interrupted turns failed before listening', async (t) => {
   const chatsDir = await tempDir(t);
   const store = createChatStore({ dir: chatsDir });
   const chat = await store.create('hi');
-  chat.messages.push({ id: 'm1', role: 'user', original: 'hi', english: 'hi', lang: 'eng_Latn',
+  chat.messages.push({ id: 'm1', role: 'user', original: 'hi', english: 'hi', lang: 'en',
     createdAt: new Date().toISOString() });
   await store.save(chat);
-  const server = await start({ port: 0, load: () => new Promise(() => {}), chatsDir });
+  const server = await start({ port: 0, load: () => new Promise(() => {}), chatsDir, settingsFile: path.join(chatsDir, 'settings.json') });
   t.after(() => new Promise((r) => { server.close(r); server.closeAllConnections(); }));
   const r = await request(server.address().port, 'GET', '/api/chats/' + chat.id);
   assert.equal(r.status, 200);
   assert.deepEqual(r.json.messages[0].error, { kind: 'failed', message: INTERRUPTED_MESSAGE });
   assert.equal(r.json.pendingStep, null);
+});
+
+const close = (server) => new Promise((r) => { server.close(r); server.closeAllConnections(); });
+
+test('settings default to settings.json next to the chats dir and are read back after a restart', async (t) => {
+  const { start } = await import('../src/main.js');
+  const dir = await tempDir(t);
+  const chatsDir = path.join(dir, 'chats');
+  const loads = [];
+  const load = (onProgress, { size }) => { loads.push(size); return Promise.resolve({ translate: async (s) => s }); };
+  const opts = { port: 0, load, download: async () => {}, downloaded: (s) => s === '4b' || s === '12b', chatsDir };
+  let server = await start(opts);
+  let port = server.address().port;
+  let r = await request(port, 'GET', '/api/settings');
+  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'default', downloadedSizes: ['4b', '12b'] });
+  r = await request(port, 'PUT', '/api/settings', {
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ claudeModel: 'haiku', translatorSize: '12b' }),
+  });
+  assert.equal(r.status, 200);
+  for (let i = 0; i < 100 && (await request(port, 'GET', '/api/settings')).json.translatorSize !== '12b'; i++) {
+    await new Promise((res) => setTimeout(res, 10));
+  }
+  await new Promise((res) => setTimeout(res, 50));
+  await close(server);
+  const saved = JSON.parse(readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  assert.deepEqual(saved, { translatorSize: '12b', claudeModel: 'haiku' });
+
+  server = await start(opts);
+  t.after(() => close(server));
+  port = server.address().port;
+  for (let i = 0; i < 100 && (await request(port, 'GET', '/api/status')).json.model.state !== 'ready'; i++) {
+    await new Promise((res) => setTimeout(res, 10));
+  }
+  r = await request(port, 'GET', '/api/settings');
+  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'haiku', downloadedSizes: ['4b', '12b'] });
+  assert.equal((await request(port, 'GET', '/api/status')).json.model.size, '12b');
+  assert.deepEqual(loads, ['4b', '12b', '12b']);
+});
+
+test('start() takes an explicit settingsFile', async (t) => {
+  const { start } = await import('../src/main.js');
+  const dir = await tempDir(t);
+  const settingsFile = path.join(dir, 'custom', 'my-settings.json');
+  const server = await start({ port: 0, load: () => new Promise(() => {}), chatsDir: path.join(dir, 'chats'), settingsFile });
+  t.after(() => close(server));
+  const r = await request(server.address().port, 'PUT', '/api/settings', {
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ claudeModel: 'sonnet' }),
+  });
+  assert.equal(r.status, 200);
+  assert.equal(JSON.parse(readFileSync(settingsFile, 'utf8')).claudeModel, 'sonnet');
+  assert.equal(existsSync(path.join(dir, 'settings.json')), false);
 });

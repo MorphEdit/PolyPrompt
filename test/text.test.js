@@ -81,9 +81,9 @@ test('protect replaces code and URLs and restore puts them back', () => {
 test('translateText calls the translator once per piece in order and keeps paragraphs', async () => {
   const t = fakeTranslator();
   const text = 'Hello there friend.\n\nSecond one. Third one here.\n\nEnd';
-  const out = await translateText(t, text, 'tha_Thai', 'eng_Latn', { maxChars: 20 });
+  const out = await translateText(t, text, 'th', 'en', { maxChars: 20 });
   assert.deepEqual(t.calls.map((c) => c.text), ['Hello there friend.', 'Second one.', 'Third one here.', 'End']);
-  assert.ok(t.calls.every((c) => c.src === 'tha_Thai' && c.tgt === 'eng_Latn'));
+  assert.ok(t.calls.every((c) => c.src === 'th' && c.tgt === 'en'));
   assert.equal(out, 'HELLO THERE FRIEND.\n\nSECOND ONE. THIRD ONE HERE.\n\nEND');
 });
 
@@ -93,7 +93,7 @@ test('translateText keeps code and URLs byte-for-byte, even with spaces around p
   const url2 = 'http://foo.bar/Baz';
   const text = `Please run ${inline} first.\n\n${code}\n\nRead ${url2} and https://Example.com/Path?q=A now.`;
   const t = fakeTranslator((s) => s.toUpperCase().replace(/⟦\d+⟧/g, (m) => ` ${m.slice(0, 1)} ${m.slice(1, -1)} ${m.slice(-1)} `));
-  const out = await translateText(t, text, 'eng_Latn', 'tha_Thai', { maxChars: 20 });
+  const out = await translateText(t, text, 'en', 'th', { maxChars: 20 });
   assert.ok(out.includes(inline));
   assert.ok(out.includes(code));
   assert.ok(out.includes(url2));
@@ -122,16 +122,35 @@ test('pieces holding only placeholders are not sent to the translator', async ()
   assert.equal(out, 'INTRO TEXT.\n\n```\ncode\n```\n\nhttps://a.b');
 });
 
-test('default maxChars is 500', async () => {
+test('default maxChars is 2000', async () => {
   const t = fakeTranslator();
-  const para = 'word '.repeat(99) + 'end.';
-  assert.equal(para.length, 499);
-  await translateText(t, `${para}\n\n${para}`, 'a', 'b');
+  const para = 'word '.repeat(399) + 'end.';
+  assert.equal(para.length, 1999);
+  await translateText(t, `${para}
+
+${para}`, 'a', 'b');
   assert.equal(t.calls.length, 2);
   const t2 = fakeTranslator();
-  await translateText(t2, 'x'.repeat(500), 'a', 'b');
+  await translateText(t2, 'x'.repeat(2000), 'a', 'b');
   assert.equal(t2.calls.length, 1);
   const t3 = fakeTranslator();
-  await translateText(t3, 'x'.repeat(501), 'a', 'b');
+  await translateText(t3, 'x'.repeat(2001), 'a', 'b');
   assert.equal(t3.calls.length, 2);
+});
+
+test('a multi-sentence run of up to 2000 characters is one translator call; a longer one is split', async () => {
+  const sentences = (n) => Array.from({ length: n }, (_, i) => `Sentence ${i} is about topic ${i * 7}.`).join(' ');
+  const run = sentences(60);
+  assert.ok(run.length <= 2000 && run.length > 1500, String(run.length));
+  const t = fakeTranslator();
+  const out = await translateText(t, run, 'en', 'th');
+  assert.deepEqual(t.calls.map((c) => c.text), [run]);
+  assert.equal(out, run.toUpperCase());
+  const long = sentences(120);
+  assert.ok(long.length > 2000);
+  const t2 = fakeTranslator();
+  const out2 = await translateText(t2, long, 'en', 'th');
+  assert.ok(t2.calls.length > 1);
+  assert.ok(t2.calls.every((c) => c.text.length <= 2000));
+  assert.equal(out2, long.toUpperCase());
 });
