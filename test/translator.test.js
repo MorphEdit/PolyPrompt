@@ -52,3 +52,14 @@ test('with no network and no cache, loading fails and the model manager reports 
     await fs.rm(cacheDir, { recursive: true, force: true });
   }
 });
+
+test('a missing transformers.js install fails with an actionable message', async () => {
+  const { loadNllbTranslator } = await import('../src/translator.js');
+  const missing = Object.assign(new Error("Cannot find package '@huggingface/transformers'"), { code: 'ERR_MODULE_NOT_FOUND' });
+  await assert.rejects(
+    loadNllbTranslator(() => {}, { importLib: () => Promise.reject(missing) }),
+    (err) => /not found: run npm ci/.test(err.message) && err.cause === missing,
+  );
+  const other = new Error('boom');
+  await assert.rejects(loadNllbTranslator(() => {}, { importLib: () => Promise.reject(other) }), (err) => err === other);
+});
