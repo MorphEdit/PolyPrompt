@@ -3,7 +3,8 @@
 // swapped later.
 
 import { spawn, execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 const INSTALL_LOGIN_HINT = 'ติดตั้ง Claude Code แล้วเปิดเทอร์มินัล พิมพ์ `claude` และ `/login` เพื่อเข้าสู่ระบบ';
@@ -16,8 +17,21 @@ const MESSAGES = {
 const AUTH = /log ?in|auth/i;
 const NODE_SCRIPT = /\.[cm]?js$/i;
 // Args reaching cmd.exe (fallback for unparsable .cmd shims) are only our
-// fixed flags and the session id; anything else is refused, never quoted.
+// fixed flags, SYSTEM_PROMPT and the session id; anything else is refused.
 const CMD_SAFE_ARG = /^[\w.:\/=-]*$/;
+
+// Replaces Claude Code's coding-agent prompt. A fixed constant with no
+// cmd.exe metacharacters, so the .cmd fallback may pass it quoted.
+export const SYSTEM_PROMPT = 'You are Claude, a helpful general assistant in a chat. '
+  + 'You have no access to files, folders, tools or the computer you run on. '
+  + 'Answer from your own knowledge and what the user writes in the chat.';
+
+// Working directory for every `claude` run: owned by the app and outside the
+// PolyPrompt repo, so Claude Code sees no git state or CLAUDE.md and keeps
+// these sessions apart from the developer's own.
+export function defaultClaudeHome() {
+  return process.env.CLAUDE_HOME_DIR || path.join(homedir(), '.polyprompt', 'claude-home');
+}
 
 export class ClaudeError extends Error {
   constructor(kind, detail) {
@@ -30,7 +44,11 @@ export function buildArgs(sessionId) {
   // `--tools ""` is the strictest option in `claude --help`: it removes every
   // built-in tool, unlike --disallowedTools which only blocks listed names.
   // --strict-mcp-config without --mcp-config also loads no MCP server tools.
-  const args = ['-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config'];
+  // --setting-sources user skips project/local settings; auth is user-level.
+  const args = [
+    '-p', '--output-format', 'json', '--tools', '', '--strict-mcp-config',
+    '--setting-sources', 'user', '--system-prompt', SYSTEM_PROMPT,
+  ];
   if (sessionId) args.push('--resume', sessionId);
   return args;
 }
@@ -66,7 +84,7 @@ export function resolveCommand(command, args) {
     const script = path.join(path.dirname(found), m[1]);
     if (existsSync(script)) return { file: process.execPath, args: [script, ...args] };
   }
-  if (!args.every((a) => CMD_SAFE_ARG.test(a))) throw new ClaudeError('failed', 'unsafe argument');
+  if (!args.every((a) => a === SYSTEM_PROMPT || CMD_SAFE_ARG.test(a))) throw new ClaudeError('failed', 'unsafe argument');
   const line = [found, ...args].map((a) => `"${a}"`).join(' ');
   return {
     file: process.env.ComSpec || 'cmd.exe',
@@ -97,16 +115,18 @@ function parseResult(stdout) {
   }
 }
 
-export function createClaudeRunner({ command = 'claude', timeoutMs = 300000 } = {}) {
+export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd = defaultClaudeHome() } = {}) {
   function run({ prompt, sessionId } = {}) {
     return new Promise((resolve, reject) => {
       let target;
       try {
         target = resolveCommand(command, buildArgs(sessionId));
+        mkdirSync(cwd, { recursive: true });
       } catch (err) {
         return reject(err instanceof ClaudeError ? err : new ClaudeError('failed', err.message));
       }
       const child = spawn(target.file, target.args, {
+        cwd,
         shell: false,
         windowsHide: true,
         windowsVerbatimArguments: target.windowsVerbatimArguments || false,
