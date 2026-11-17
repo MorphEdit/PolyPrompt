@@ -6,6 +6,7 @@ import { spawn, execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { CLAUDE_OPTIONS } from '../public/models.js';
 
 const INSTALL_LOGIN_HINT = 'ติดตั้ง Claude Code แล้วเปิดเทอร์มินัล พิมพ์ `claude` และ `/login` เพื่อเข้าสู่ระบบ';
 const MESSAGES = {
@@ -13,8 +14,12 @@ const MESSAGES = {
   not_logged_in: `Claude Code ยังไม่ได้เข้าสู่ระบบ — ${INSTALL_LOGIN_HINT}`,
   timeout: 'Claude ไม่ตอบภายในเวลาที่กำหนด กรุณาลองส่งใหม่',
   failed: 'เรียก Claude ไม่สำเร็จ',
+  model_rejected: 'Claude ไม่รับโมเดลที่เลือก (อาจไม่มีโมเดลนี้ หรือบัญชีนี้ใช้ไม่ได้) จึงกลับไปใช้โมเดลก่อนหน้า กรุณาลองส่งใหม่',
 };
 const AUTH = /log ?in|auth/i;
+// `claude -p --model <unknown>` answers is_error with api_error_status 404
+// and "There's an issue with the selected model (...)".
+const MODEL_REJECTED = /selected model|unrecognized_model/i;
 const NODE_SCRIPT = /\.[cm]?js$/i;
 // Args reaching cmd.exe (fallback for unparsable .cmd shims) are only our
 // fixed flags, SYSTEM_PROMPT and the session id; anything else is refused.
@@ -40,9 +45,9 @@ export class ClaudeError extends Error {
   }
 }
 
-// Claude models the picker offers; 'default' (or anything else) adds no
-// --model flag, so Claude Code uses its own default.
-export const MODEL_FLAGS = ['opus', 'sonnet', 'haiku'];
+// Full model IDs the picker offers (public/models.js); 'default' (or
+// anything else) adds no --model flag, so Claude Code uses its own default.
+export const MODEL_FLAGS = CLAUDE_OPTIONS.map((o) => o.value).filter((v) => v !== 'default');
 
 export function buildArgs(sessionId, model = 'default') {
   // `--tools ""` is the strictest option in `claude --help`: it removes every
@@ -111,6 +116,20 @@ function killTree(child) {
   });
 }
 
+// The model that answered: the modelUsage key with the most output tokens
+// (Claude Code may also list a small helper model), or null.
+export function answeringModel(data) {
+  const usage = data?.modelUsage;
+  if (!usage || typeof usage !== 'object') return null;
+  let best = null;
+  let most = -1;
+  for (const [id, u] of Object.entries(usage)) {
+    const out = Number(u?.outputTokens) || 0;
+    if (out > most) { best = id; most = out; }
+  }
+  return best;
+}
+
 function parseResult(stdout) {
   try {
     const data = JSON.parse(stdout.trim());
@@ -166,9 +185,16 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
         const data = parseResult(stdout);
         const resultText = data && typeof data.result === 'string' ? data.result : '';
         const ok = code === 0 && data && data.is_error !== true && typeof data.result === 'string';
-        if (ok) return finish(null, { text: data.result, sessionId: data.session_id ?? null });
+        if (ok) {
+          const answer = { text: data.result, sessionId: data.session_id ?? null };
+          const model = answeringModel(data);
+          return finish(null, model ? { ...answer, model } : answer);
+        }
         // On Windows cmd.exe reports a missing command with exit code 9009.
         if (process.platform === 'win32' && code === 9009 && !data) return finish(new ClaudeError('cli_missing'));
+        if (MODEL_REJECTED.test(stderr) || MODEL_REJECTED.test(resultText)) {
+          return finish(new ClaudeError('model_rejected', model));
+        }
         if (AUTH.test(stderr) || AUTH.test(resultText)) return finish(new ClaudeError('not_logged_in'));
         const detail = code !== 0 ? `exit ${code}` : data ? 'is_error' : 'invalid JSON';
         finish(new ClaudeError('failed', detail));

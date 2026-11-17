@@ -252,6 +252,12 @@ details.translation .translation-body {
   color: var(--muted);
 }
 
+.answered-by {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .msg-error {
   margin-top: 6px;
   max-width: 85%;

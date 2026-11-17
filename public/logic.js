@@ -1,4 +1,7 @@
 // Pure front-end logic: no DOM, so `node --test` can import it directly.
+import { CLAUDE_OPTIONS } from './models.js';
+
+export { CLAUDE_OPTIONS };
 
 // What a keydown in the message box should do: "send", "newline" or "none".
 // Enter during an IME composition (Thai, Japanese, ...) only confirms the
@@ -177,14 +180,14 @@ export const SIZE_OPTIONS = [
   { value: '27b', label: '27B', bytes: 16_546_704_480, hint: 'แปลดีที่สุด ช้ามาก ต้องใช้ RAM มาก' },
 ];
 
-export const CLAUDE_OPTIONS = [
-  { value: 'default', label: 'ค่าเริ่มต้น', hint: 'ใช้โมเดลที่ Claude Code ตั้งไว้' },
-  { value: 'opus', label: 'Opus', hint: 'ฉลาดที่สุด ใช้โควตามากที่สุด' },
-  { value: 'sonnet', label: 'Sonnet', hint: 'สมดุลระหว่างความฉลาดและความเร็ว' },
-  { value: 'haiku', label: 'Haiku', hint: 'เร็วที่สุด ประหยัดโควตา' },
-];
-
 const optionOf = (options, value) => options.find((o) => o.value === value) ?? options[0];
+
+// Small text under an answer naming the model that wrote it, when that is
+// not the one picked (always for "ค่าเริ่มต้น"); '' otherwise.
+export function answeredByLabel(message) {
+  if (!message?.model || message.model === message.requestedModel) return '';
+  return `ตอบโดย ${message.model}`;
+}
 
 // "7.3 GB" (one decimal, decimal gigabytes).
 export function formatGB(bytes) {

@@ -25,11 +25,11 @@ test('a missing settings file means the defaults and is not written', async (t) 
 test('updates persist and are read back', async (t) => {
   const file = path.join(await tempDir(t), 'nested', 'settings.json');
   const s = await createSettingsStore({ file });
-  await s.update({ claudeModel: 'haiku' });
+  await s.update({ claudeModel: 'claude-haiku-5-5' });
   await s.update({ translatorSize: '12b' });
-  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { translatorSize: '12b', claudeModel: 'haiku' });
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { translatorSize: '12b', claudeModel: 'claude-haiku-5-5' });
   const again = await createSettingsStore({ file });
-  assert.deepEqual(again.get(), { translatorSize: '12b', claudeModel: 'haiku' });
+  assert.deepEqual(again.get(), { translatorSize: '12b', claudeModel: 'claude-haiku-5-5' });
 });
 
 test('unknown values in the file fall back to the defaults', async (t) => {
@@ -86,8 +86,8 @@ test('PUT /api/settings rejects bad bodies with 400 and applies nothing', async 
   const s = await setup(t);
   s.loads[0].resolve();
   await tick();
-  for (const body of ['[]', 'null', '"x"', 'nope', {}, { other: 1 }, { claudeModel: 'opus', other: 1 },
-    { claudeModel: 'gpt' }, { translatorSize: '8b' }, { translatorSize: 4 }, { claudeModel: 'opus', translatorSize: 'x' }]) {
+  for (const body of ['[]', 'null', '"x"', 'nope', {}, { other: 1 }, { claudeModel: 'claude-opus-5-5', other: 1 },
+    { claudeModel: 'gpt' }, { translatorSize: '8b' }, { translatorSize: 4 }, { claudeModel: 'claude-opus-5-5', translatorSize: 'x' }]) {
     const r = await s.put(body);
     assert.equal(r.status, 400, JSON.stringify(body));
   }
@@ -98,20 +98,20 @@ test('PUT /api/settings rejects bad bodies with 400 and applies nothing', async 
 
 test('PUT claudeModel saves at once and survives a restart', async (t) => {
   const s = await setup(t);
-  const r = await s.put({ claudeModel: 'opus' });
+  const r = await s.put({ claudeModel: 'claude-opus-5-5' });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'opus', downloadedSizes: ['4b'] });
-  assert.equal((await s.get()).json.claudeModel, 'opus');
-  assert.equal((await createSettingsStore({ file: s.file })).get().claudeModel, 'opus');
+  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'claude-opus-5-5', downloadedSizes: ['4b'] });
+  assert.equal((await s.get()).json.claudeModel, 'claude-opus-5-5');
+  assert.equal((await createSettingsStore({ file: s.file })).get().claudeModel, 'claude-opus-5-5');
 });
 
 test('PUT translatorSize is saved only after the new size loads', async (t) => {
   const s = await setup(t);
   s.loads[0].resolve();
   await tick();
-  let r = await s.put({ translatorSize: '12b', claudeModel: 'sonnet' });
+  let r = await s.put({ translatorSize: '12b', claudeModel: 'claude-sonnet-5-5' });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'sonnet', downloadedSizes: ['4b'] });
+  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'claude-sonnet-5-5', downloadedSizes: ['4b'] });
   r = await s.get('/api/status');
   assert.deepEqual(r.json, {
     model: { state: 'ready', progress: 1, error: null, size: '4b' },
@@ -128,7 +128,7 @@ test('PUT translatorSize is saved only after the new size loads', async (t) => {
   await tick();
   await tick();
   r = await s.get();
-  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'sonnet', downloadedSizes: ['4b', '12b'] });
+  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'claude-sonnet-5-5', downloadedSizes: ['4b', '12b'] });
   for (let i = 0; i < 100 && (await createSettingsStore({ file: s.file })).get().translatorSize !== '12b'; i++) {
     await new Promise((res) => setTimeout(res, 20));
   }
@@ -138,7 +138,7 @@ test('PUT translatorSize is saved only after the new size loads', async (t) => {
 test('PUT translatorSize answers 409 while a download or a load runs, applying nothing', async (t) => {
   const s = await setup(t, { downloaded: ['4b', '12b'] });
   // Startup load.
-  let r = await s.put({ translatorSize: '12b', claudeModel: 'haiku' });
+  let r = await s.put({ translatorSize: '12b', claudeModel: 'claude-haiku-5-5' });
   assert.equal(r.status, 409);
   assert.equal(existsSync(s.file), false, 'claudeModel not applied either');
   s.loads[0].reject(new Error('x'));
@@ -152,7 +152,7 @@ test('PUT translatorSize answers 409 while a download or a load runs, applying n
   assert.equal((await s.put({ translatorSize: '27b' })).status, 200);
   assert.equal((await s.put({ translatorSize: '12b' })).status, 409);
   // The Claude model alone can still change.
-  assert.equal((await s.put({ claudeModel: 'haiku' })).status, 200);
+  assert.equal((await s.put({ claudeModel: 'claude-haiku-5-5' })).status, 200);
 });
 
 test('PUT translatorSize is accepted in the error state', async (t) => {

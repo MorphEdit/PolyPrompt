@@ -36,7 +36,7 @@ async function translate(translator, text, src, tgt, maxChars) {
 
 function errorOf(err) {
   if (err instanceof TranslateError) return { kind: 'failed', message: TRANSLATE_FAILED };
-  if (['cli_missing', 'not_logged_in', 'timeout', 'failed'].includes(err?.kind)) {
+  if (['cli_missing', 'not_logged_in', 'timeout', 'failed', 'model_rejected'].includes(err?.kind)) {
     return { kind: err.kind, message: err.message || TURN_FAILED };
   }
   return { kind: 'failed', message: TURN_FAILED };
@@ -50,6 +50,7 @@ export async function runTurn(deps, chat, message) {
   const id = chat.id;
   // Restored on failure so a failed final save leaves no answer and the old session.
   const before = { count: chat.messages.length, sessionId: chat.sessionId, lang: chat.lang };
+  let model = 'default';
   try {
     pending.set(id, 'translating');
     // Every call goes through the manager's queue, so a size switch during
@@ -77,7 +78,7 @@ export async function runTurn(deps, chat, message) {
     message.english = english;
 
     pending.set(id, 'thinking');
-    const model = settings?.get().claudeModel ?? 'default';
+    model = settings?.get().claudeModel ?? 'default';
     const answer = await runner.run({ prompt: english, sessionId: chat.sessionId ?? null, model });
 
     // Back to this message's language; English and unsupported are shown as is.
@@ -101,6 +102,11 @@ export async function runTurn(deps, chat, message) {
       lang: supported ? lang : ENGLISH,
       createdAt: new Date().toISOString(),
     };
+    // Which model answered, and which one was asked for (see answeredByLabel).
+    if (answer.model) {
+      reply.model = answer.model;
+      reply.requestedModel = model;
+    }
     if (!supported) notes.push(UNSUPPORTED_NOTE);
     if (notes.length) reply.note = notes.join(' ');
     chat.messages.push(reply);
@@ -112,6 +118,14 @@ export async function runTurn(deps, chat, message) {
     chat.sessionId = before.sessionId;
     chat.lang = before.lang;
     message.error = errorOf(err);
+    // Keep the previous selection when Claude refuses the picked model.
+    if (err?.kind === 'model_rejected') {
+      try {
+        await settings?.revertClaudeModel?.(model);
+      } catch (revertErr) {
+        console.error('could not restore the previous Claude model:', revertErr);
+      }
+    }
     try {
       await chatStore.save(chat);
     } catch (saveErr) {

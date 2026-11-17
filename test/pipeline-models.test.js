@@ -70,9 +70,9 @@ test('the Claude model setting reaches the runner and applies from the next mess
   const s = await setup(t);
   const chat = await s.turn('Hello there');
   assert.equal(s.runs[0].model, 'default');
-  await s.settings.update({ claudeModel: 'opus' });
+  await s.settings.update({ claudeModel: 'claude-opus-5-5' });
   await s.turn('Next one', chat);
-  assert.equal(s.runs[1].model, 'opus');
+  assert.equal(s.runs[1].model, 'claude-opus-5-5');
   assert.equal(s.runs[1].sessionId, 's1', 'the same Claude session continues');
 });
 

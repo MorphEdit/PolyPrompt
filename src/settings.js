@@ -4,18 +4,23 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { renameRetry } from './store.js';
 import { DEFAULT_SIZE, isSize } from './translator.js';
+import { CLAUDE_OPTIONS, LEGACY_CLAUDE_MODELS } from '../public/models.js';
 
-export const CLAUDE_MODELS = ['default', 'opus', 'sonnet', 'haiku'];
+export const CLAUDE_MODELS = CLAUDE_OPTIONS.map((o) => o.value);
 export const DEFAULTS = { translatorSize: DEFAULT_SIZE, claudeModel: 'default' };
 
 export const isClaudeModel = (v) => CLAUDE_MODELS.includes(v);
 
-// Unknown or missing values fall back to the defaults.
+// Unknown or missing values fall back to the defaults; old aliases
+// (opus, sonnet, haiku) become their full model IDs.
 function clean(data) {
   const obj = data && typeof data === 'object' ? data : {};
+  const claudeModel = Object.hasOwn(LEGACY_CLAUDE_MODELS, obj.claudeModel)
+    ? LEGACY_CLAUDE_MODELS[obj.claudeModel]
+    : obj.claudeModel;
   return {
     translatorSize: isSize(obj.translatorSize) ? obj.translatorSize : DEFAULTS.translatorSize,
-    claudeModel: isClaudeModel(obj.claudeModel) ? obj.claudeModel : DEFAULTS.claudeModel,
+    claudeModel: isClaudeModel(claudeModel) ? claudeModel : DEFAULTS.claudeModel,
   };
 }
 
@@ -29,6 +34,8 @@ export async function createSettingsStore({ file }) {
     if (err.code !== 'ENOENT') console.warn(`settings file ${file} unusable, using defaults: ${err.message}`);
   }
   let writing = Promise.resolve();
+  // The Claude model chosen before the current one, for revertClaudeModel().
+  let previousClaudeModel = DEFAULTS.claudeModel;
 
   async function write(snapshot) {
     await mkdir(path.dirname(file), { recursive: true });
@@ -42,17 +49,27 @@ export async function createSettingsStore({ file }) {
     }
   }
 
+  async function update(patch) {
+    const next = clean({ ...current, ...patch });
+    if (next.translatorSize === current.translatorSize && next.claudeModel === current.claudeModel) return { ...current };
+    if (next.claudeModel !== current.claudeModel) previousClaudeModel = current.claudeModel;
+    current = next;
+    const snapshot = { ...current };
+    writing = writing.catch(() => {}).then(() => write(snapshot));
+    await writing;
+    return { ...current };
+  }
+
   return {
     file,
     get: () => ({ ...current }),
-    async update(patch) {
-      const next = clean({ ...current, ...patch });
-      if (next.translatorSize === current.translatorSize && next.claudeModel === current.claudeModel) return { ...current };
-      current = next;
-      const snapshot = { ...current };
-      writing = writing.catch(() => {}).then(() => write(snapshot));
-      await writing;
-      return { ...current };
+    update,
+    // Claude refused `model`: go back to the model chosen before it, unless
+    // the user has picked another one meanwhile.
+    async revertClaudeModel(model) {
+      if (current.claudeModel !== model) return { ...current };
+      const back = previousClaudeModel === model ? DEFAULTS.claudeModel : previousClaudeModel;
+      return update({ claudeModel: back });
     },
   };
 }

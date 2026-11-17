@@ -1,7 +1,7 @@
 import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
   retryEnabled, lastMessageHasError, renderMarkdown, SIZE_OPTIONS, CLAUDE_OPTIONS, formatGB,
-  pickerLabel, pickerDisabled, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
+  pickerLabel, pickerDisabled, answeredByLabel, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
 } from './logic.js';
 
 const POLL_MS = 1000;
@@ -371,6 +371,13 @@ function renderMessage(m, index, messages) {
       note.textContent = m.note;
       wrap.append(note);
     }
+    const by = answeredByLabel(m);
+    if (by) {
+      const meta = document.createElement('div');
+      meta.className = 'answered-by';
+      meta.textContent = by;
+      wrap.append(meta);
+    }
   }
   return wrap;
 }
@@ -406,7 +413,10 @@ async function refreshChat(id) {
     const wasPending = state.chat?.pendingStep != null;
     state.chat = chat;
     renderChat();
-    if (wasPending && chat.pendingStep == null) loadChats();
+    if (wasPending && chat.pendingStep == null) {
+      loadChats();
+      loadSettings(); // a refused Claude model was put back on the server
+    }
   } catch (err) {
     if (state.chat?.id === id) showError(err);
   }
