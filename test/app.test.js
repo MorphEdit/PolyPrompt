@@ -86,16 +86,18 @@ test('the model picker shows both choices, saves on change and follows the model
   assert.equal(byId.picker.disabled, false);
   byId.picker.listeners.click();
   assert.equal(byId['picker-menu'].hidden, false);
-  const [b4, b12, b27, cDefault, cOpus] = pickerButtons();
-  assert.equal(pickerButtons().length, 7);
+  const [b4, b12, b27, cDefault, cFable, cOpus] = pickerButtons();
+  assert.equal(pickerButtons().length, 8);
+  assert.equal(cDefault.children[0].textContent, 'ค่าเริ่มต้น');
+  assert.equal(cFable.children[0].textContent, 'Fable 5.2');
   assert.equal(b4.children[0].textContent, '4B · ดาวน์โหลดแล้ว');
   assert.equal(b12.children[0].textContent, '12B · 7.3 GB');
   assert.equal([b4, b12, b27].some((b) => b.disabled), false);
 
   cOpus.listeners.click();
   await tick(20);
-  assert.deepEqual(puts.at(-1), { claudeModel: 'opus' });
-  assert.equal(byId.picker.textContent, 'แปล 4B · Claude Opus');
+  assert.deepEqual(puts.at(-1), { claudeModel: 'claude-opus-5-5' });
+  assert.equal(byId.picker.textContent, 'แปล 4B · Claude Opus 5.5');
 
   // A missing size asks first; cancelling sends nothing.
   let asked = null;

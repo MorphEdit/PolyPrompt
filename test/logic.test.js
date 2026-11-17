@@ -192,18 +192,18 @@ test('retryEnabled: only when no reply is pending and the model is ready', () =>
 
 test('picker label shows both current choices', () => {
   assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'default' }), 'แปล 4B · Claude ค่าเริ่มต้น');
-  assert.equal(pickerLabel({ translatorSize: '27b', claudeModel: 'opus' }), 'แปล 27B · Claude Opus');
+  assert.equal(pickerLabel({ translatorSize: '27b', claudeModel: 'claude-opus-5-5' }), 'แปล 27B · Claude Opus 5.5');
 });
 
-test('picker options: three sizes with hints, four Claude models', () => {
+test('picker options: three sizes with hints, five Claude models', () => {
   assert.deepEqual(SIZE_OPTIONS.map((o) => o.value), ['4b', '12b', '27b']);
   assert.equal(SIZE_OPTIONS[0].hint, 'เร็ว เหมาะกับเครื่องส่วนใหญ่');
   assert.equal(SIZE_OPTIONS[1].hint, 'แปลดีขึ้น ช้าลง ต้องใช้ RAM/การ์ดจอมากขึ้น');
   assert.equal(SIZE_OPTIONS[2].hint, 'แปลดีที่สุด ช้ามาก ต้องใช้ RAM มาก');
-  assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.value), ['default', 'opus', 'sonnet', 'haiku']);
+  assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.value), ['default', 'claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']);
   for (const o of CLAUDE_OPTIONS) assert.match(o.hint, /[฀-๿]/);
-  assert.equal(CLAUDE_OPTIONS[1].hint, 'ฉลาดที่สุด ใช้โควตามากที่สุด');
-  assert.equal(CLAUDE_OPTIONS[3].hint, 'เร็วที่สุด ประหยัดโควตา');
+  assert.equal(CLAUDE_OPTIONS[2].hint, 'ฉลาดที่สุด ใช้โควตามากที่สุด');
+  assert.equal(CLAUDE_OPTIONS[4].hint, 'เร็วที่สุด ประหยัดโควตา');
 });
 
 test('size notes and the download confirmation show the size', () => {

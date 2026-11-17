@@ -86,7 +86,7 @@ test('settings default to settings.json next to the chats dir and are read back 
   assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'default', downloadedSizes: ['4b', '12b'] });
   r = await request(port, 'PUT', '/api/settings', {
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ claudeModel: 'haiku', translatorSize: '12b' }),
+    body: JSON.stringify({ claudeModel: 'claude-haiku-5-5', translatorSize: '12b' }),
   });
   assert.equal(r.status, 200);
   for (let i = 0; i < 100 && (await request(port, 'GET', '/api/settings')).json.translatorSize !== '12b'; i++) {
@@ -95,7 +95,7 @@ test('settings default to settings.json next to the chats dir and are read back 
   await new Promise((res) => setTimeout(res, 50));
   await close(server);
   const saved = JSON.parse(readFileSync(path.join(dir, 'settings.json'), 'utf8'));
-  assert.deepEqual(saved, { translatorSize: '12b', claudeModel: 'haiku' });
+  assert.deepEqual(saved, { translatorSize: '12b', claudeModel: 'claude-haiku-5-5' });
 
   server = await start(opts);
   t.after(() => close(server));
@@ -104,7 +104,7 @@ test('settings default to settings.json next to the chats dir and are read back 
     await new Promise((res) => setTimeout(res, 10));
   }
   r = await request(port, 'GET', '/api/settings');
-  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'haiku', downloadedSizes: ['4b', '12b'] });
+  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'claude-haiku-5-5', downloadedSizes: ['4b', '12b'] });
   assert.equal((await request(port, 'GET', '/api/status')).json.model.size, '12b');
   assert.deepEqual(loads, ['4b', '12b', '12b']);
 });
@@ -116,9 +116,9 @@ test('start() takes an explicit settingsFile', async (t) => {
   const server = await start({ port: 0, load: () => new Promise(() => {}), chatsDir: path.join(dir, 'chats'), settingsFile });
   t.after(() => close(server));
   const r = await request(server.address().port, 'PUT', '/api/settings', {
-    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ claudeModel: 'sonnet' }),
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ claudeModel: 'claude-sonnet-5-5' }),
   });
   assert.equal(r.status, 200);
-  assert.equal(JSON.parse(readFileSync(settingsFile, 'utf8')).claudeModel, 'sonnet');
+  assert.equal(JSON.parse(readFileSync(settingsFile, 'utf8')).claudeModel, 'claude-sonnet-5-5');
   assert.equal(existsSync(path.join(dir, 'settings.json')), false);
 });
