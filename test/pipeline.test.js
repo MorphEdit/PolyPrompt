@@ -273,6 +273,31 @@ test('translation failure sets a failed error', async (t) => {
   assert.equal(chat.sessionId, null);
 });
 
+test('a failed final save leaves no answer, the old session and a retryable error', async (t) => {
+  const { api, chatStore, runner } = await setup(t, { table: THAI });
+  const save = chatStore.save;
+  let failNext = false;
+  chatStore.save = async (chat) => {
+    if (failNext && chat.messages.length > 1) {
+      failNext = false;
+      throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+    }
+    return save(chat);
+  };
+  failNext = true;
+  const { chatId, messageId, chat } = await api.turn({ text: 'สวัสดี' });
+  assert.deepEqual(chat.messages.map((m) => m.role), ['user']);
+  assert.equal(chat.messages[0].error.kind, 'failed');
+  assert.equal(chat.sessionId, null);
+  assert.equal(chat.lang, null);
+  assert.equal((await api.retry(chatId, messageId)).status, 202);
+  const after = await api.idle(chatId);
+  assert.deepEqual(after.messages.map((m) => m.role), ['user', 'assistant']);
+  assert.equal(after.messages[0].error, undefined);
+  assert.equal(after.sessionId, 's2');
+  assert.equal(runner.calls.length, 2);
+});
+
 test('a throwing detector fails the turn without crashing the server', async (t) => {
   const { api } = await setup(t, { table: { boom: null } });
   const r = await api.turn({ text: 'boom' });

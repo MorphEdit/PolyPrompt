@@ -41,6 +41,8 @@ function errorOf(err) {
 export async function runTurn(deps, chat, message) {
   const { chatStore, modelManager, detect, runner, pending, maxChars = 500 } = deps;
   const id = chat.id;
+  // Restored on failure so a failed final save leaves no answer and the old session.
+  const before = { count: chat.messages.length, sessionId: chat.sessionId, lang: chat.lang };
   try {
     pending.set(id, 'translating');
     const translator = modelManager.translator();
@@ -84,6 +86,9 @@ export async function runTurn(deps, chat, message) {
     await chatStore.save(chat);
   } catch (err) {
     if (!(err?.kind)) console.error(`turn failed in chat ${id}:`, err);
+    chat.messages.length = before.count;
+    chat.sessionId = before.sessionId;
+    chat.lang = before.lang;
     message.error = errorOf(err);
     try {
       await chatStore.save(chat);
