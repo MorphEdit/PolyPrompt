@@ -273,6 +273,35 @@ test('translation failure sets a failed error', async (t) => {
   assert.equal(chat.sessionId, null);
 });
 
+test('a GET racing the end of a turn never shows a stale chat as finished', async (t) => {
+  const { api, chatStore, translator, pending } = await setup(t, { table: THAI });
+  const d = deferred();
+  translator.gate = () => d.promise;
+  translator.fail = true;
+  const { chatId } = (await api.send({ text: 'สวัสดี' })).json;
+  while (pending.get(chatId) !== 'translating') await tick();
+  // The GET reads the file while the turn is still running, then the turn ends.
+  const get = chatStore.get;
+  const read = deferred();
+  const release = deferred();
+  chatStore.get = async (id) => {
+    const chat = await get(id);
+    read.resolve();
+    await release.promise;
+    return chat;
+  };
+  const response = api.get(chatId);
+  await read.promise;
+  chatStore.get = get;
+  d.resolve();
+  while (pending.get(chatId) !== null) await tick();
+  release.resolve();
+  const { json } = await response;
+  if (json.pendingStep === null) assert.ok(json.messages[0].error, 'finished chat must carry its error');
+  else assert.equal(json.messages[0].error, undefined);
+  assert.deepEqual((await api.idle(chatId)).messages[0].error, { kind: 'failed', message: TRANSLATE_FAILED });
+});
+
 test('a failed final save leaves no answer, the old session and a retryable error', async (t) => {
   const { api, chatStore, runner } = await setup(t, { table: THAI });
   const save = chatStore.save;
