@@ -35,9 +35,13 @@ export function formatProgress(progress) {
   return `${Math.round(p * 100)}%`;
 }
 
+const THAI = /[฀-๿]/;
+
 // Short Thai message for a failed API call; status 0 means the request never
-// reached the server.
-export function apiErrorMessage(status) {
+// reached the server. A Thai message from the server (folder, permission,
+// stop and old-session routes) is shown as is.
+export function apiErrorMessage(status, serverMessage) {
+  if (typeof serverMessage === 'string' && THAI.test(serverMessage)) return serverMessage;
   switch (status) {
     case 0: return 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้';
     case 400: return 'ไม่สามารถส่งข้อความว่างได้';
@@ -224,4 +228,51 @@ export function confirmDownloadText(size) {
 // "ดาวน์โหลดแล้ว" or the download size.
 export function sizeOptionNote(size, downloadedSizes = []) {
   return downloadedSizes.includes(size) ? 'ดาวน์โหลดแล้ว' : formatGB(optionOf(SIZE_OPTIONS, size).bytes);
+}
+
+// ---- work folder, live turn and old Claude Code sessions ----
+
+export const STOPPED_NOTE = 'หยุดแล้ว';
+export const TRUNCATED_NOTE = 'ผลลัพธ์ยาวเกินไป จึงเก็บไว้เฉพาะส่วนต้น';
+export const DECISION_LABELS = [
+  { decision: 'allow', label: 'อนุญาต' },
+  { decision: 'allow_chat', label: 'อนุญาตตลอดในแชตนี้' },
+  { decision: 'deny', label: 'ไม่อนุญาต' },
+];
+
+// "หยุด" only while `claude` runs (the thinking step).
+export function canStop(chat) {
+  return chat?.pendingStep === 'thinking';
+}
+
+// The work folder of what is open: an old session's, the chat's, or the one
+// picked for a new chat (before its first message).
+export function currentFolder({ chat, session, pendingFolder }) {
+  if (session) return session.folder;
+  if (chat) return chat.folder ?? null;
+  return pendingFolder ?? null;
+}
+
+// The folder can be picked only for a new chat.
+export function canPickFolder({ chat, session }) {
+  return !chat && !session;
+}
+
+// Body of POST /api/messages for what is open.
+export function sendBody({ text, chat, session, pendingFolder }) {
+  if (chat) return { chatId: chat.id, text };
+  if (session) return { text, folder: session.folder, resumeSessionId: session.id };
+  return pendingFolder ? { text, folder: pendingFolder } : { text };
+}
+
+// Progress note of an old session's translation, or '' when done.
+export function sessionProgress({ done, total } = {}) {
+  if (!Number.isFinite(done) || !Number.isFinite(total) || done >= total) return '';
+  return `กำลังแปลแชตเก่า… ${done}/${total}`;
+}
+
+// Date of an old session for the sidebar, e.g. "1/3/2026".
+export function shortDate(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
 }
