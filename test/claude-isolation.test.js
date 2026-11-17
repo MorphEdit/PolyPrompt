@@ -89,7 +89,7 @@ test('--model is passed only when the setting is not "default"; resume, tools, M
       const { argv } = readLog(log);
       assert.ok(!argv.includes('--model'), String(model));
     }
-    for (const model of ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']) {
+    for (const model of ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']) {
       const log = logFile();
       await runner.run({ prompt: 'a', sessionId: 's1', model });
       const { argv, cwd } = readLog(log);
