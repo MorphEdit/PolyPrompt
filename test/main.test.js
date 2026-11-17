@@ -19,7 +19,14 @@ async function tempDir(t) {
 test('entry point prints the 127.0.0.1 URL and serves before the model is ready', { timeout: 10000 }, async (t) => {
   const chatsDir = await tempDir(t);
   const child = spawn(process.execPath, [path.join(root, 'src', 'main.js')], {
-    env: { ...process.env, PORT: '0', CHATS_DIR: chatsDir },
+    // Offline with an empty cache: the real loader must never download in tests.
+    env: {
+      ...process.env,
+      PORT: '0',
+      CHATS_DIR: chatsDir,
+      POLYPROMPT_OFFLINE: '1',
+      POLYPROMPT_CACHE_DIR: path.join(tmpdir(), 'polyprompt-no-cache'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(() => child.kill());
