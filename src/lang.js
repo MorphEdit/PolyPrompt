@@ -17,15 +17,19 @@ export const NLLB_CODES = {
   uk: 'ukr_Cyrl', ur: 'urd_Arab', vi: 'vie_Latn', yo: 'yor_Latn', zh: 'zho_Hans',
 };
 
-// Default minimum number of letters before detection is trusted ("ok", "hi" are unsure).
+// Default minimum number of Latin letters before detection is trusted ("ok", "hi" are unsure).
+// Text with any non-Latin letter (Thai, CJK, ...) skips this check: its script alone is a strong
+// signal, so short replies like "ใช่" or "你好" are still detected.
 export const MIN_LETTERS = 3;
 
 // Returns { kind: 'ok' | 'unsure' | 'unsupported', lang }.
 // Mixed-language text uses eld's top-scoring (dominant) language.
 export function detectLanguage(text, { mapping = NLLB_CODES, minLength = MIN_LETTERS } = {}) {
-  const letters = String(text ?? '').match(/\p{L}/gu)?.length ?? 0;
-  if (letters < minLength) return { kind: 'unsure', lang: null };
-  const code = eld.detect(String(text)).language;
+  const str = String(text ?? '');
+  const nonLatin = /(?!\p{Script=Latin})\p{L}/u.test(str);
+  const letters = str.match(/\p{L}/gu)?.length ?? 0;
+  if (!nonLatin && letters < minLength) return { kind: 'unsure', lang: null };
+  const code = eld.detect(str).language;
   if (!code) return { kind: 'unsure', lang: null };
   const lang = Object.hasOwn(mapping, code) ? mapping[code] : null;
   return lang ? { kind: 'ok', lang } : { kind: 'unsupported', lang: null };

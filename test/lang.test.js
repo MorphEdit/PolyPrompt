@@ -10,6 +10,16 @@ test('short Thai word -> tha_Thai', () => {
   assert.deepEqual(detectLanguage('สวัสดี'), { kind: 'ok', lang: 'tha_Thai' });
 });
 
+test('one-word Thai replies (vowel/tone marks are not letters) -> tha_Thai', () => {
+  for (const s of ['ไม่', 'ใช่', 'ดี', 'ครับ']) {
+    assert.deepEqual(detectLanguage(s), { kind: 'ok', lang: 'tha_Thai' }, s);
+  }
+});
+
+test('short Chinese -> zho_Hans', () => {
+  assert.deepEqual(detectLanguage('你好'), { kind: 'ok', lang: 'zho_Hans' });
+});
+
 test('English sentences -> eng_Latn', () => {
   for (const s of ['Hello, how are you today?', 'What is the weather like?', 'Can you help me write a function?']) {
     assert.deepEqual(detectLanguage(s), { kind: 'ok', lang: 'eng_Latn' }, s);
