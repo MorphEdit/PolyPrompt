@@ -218,6 +218,25 @@ async function serveStatic(req, res, publicDir, pathname) {
   }
 }
 
+// The server binds to 127.0.0.1, but a web page in the user's own browser can
+// still reach it: by DNS rebinding (foreign Host header) or by a cross-site
+// request (foreign Origin header). Only the app's own origins are let through.
+function allowedHosts(port) {
+  return [`127.0.0.1:${port}`, `localhost:${port}`];
+}
+
+// Returns true when the request comes from the app's own page (or a non-browser
+// client that sends no Origin).
+export function isTrustedRequest(req) {
+  const hosts = allowedHosts(req.socket.localPort);
+  const host = (req.headers.host ?? '').toLowerCase();
+  if (!hosts.includes(host)) return false;
+  if (req.method === 'GET' || req.method === 'HEAD') return true;
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  return hosts.some((h) => origin.toLowerCase() === `http://${h}`);
+}
+
 // deps: { modelManager, publicDir, chatStore, runner?, detect?, pending?, maxChars? }.
 export function createApp(options) {
   const deps = { detect: detectLanguage, ...options };
@@ -226,6 +245,7 @@ export function createApp(options) {
     try {
       const { pathname } = new URL(req.url, 'http://127.0.0.1');
       if (pathname === '/api' || pathname.startsWith('/api/')) {
+        if (!isTrustedRequest(req)) return sendError(res, 403, 'forbidden');
         const found = matchRoute(req.method, pathname);
         if (!found) return sendError(res, 404, 'not found');
         return await found.route.handler({ req, res, params: found.params, deps });
