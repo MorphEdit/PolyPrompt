@@ -196,34 +196,83 @@ function sharedLlama(lib) {
   return llamaPromise;
 }
 
-// Model-manager loader: downloads the size if missing, then loads it.
+// Parallel sequences in one context: independent pieces of an answer are
+// translated at once. Flash attention is needed for this to be fast.
+export const SEQUENCES = 4;
+const CONTEXT_SIZE = { max: 8192 };
+
+// Creates the context with flash attention and `sequences` sequences; when the
+// backend refuses (or VRAM is short), falls back to 1 sequence and defaults.
+async function createContext(model, sequences) {
+  if (sequences > 1) {
+    try {
+      const context = await model.createContext({ contextSize: CONTEXT_SIZE, flashAttention: true, sequences });
+      return { context, sequences };
+    } catch (err) {
+      console.warn(`translator: flash attention with ${sequences} sequences failed, using 1 sequence:`, err?.message ?? err);
+    }
+  }
+  return { context: await model.createContext({ contextSize: CONTEXT_SIZE }), sequences: 1 };
+}
+
+// Model-manager loader: downloads the size if missing, then loads it and runs
+// one tiny warm-up translation so the user's first message is not slowed by it.
 // node-llama-cpp picks CUDA, Vulkan or Metal when available, else the CPU.
-export async function loadTranslateGemma(onProgress = () => {}, { size = DEFAULT_SIZE, ...opts } = {}) {
+export async function loadTranslateGemma(onProgress = () => {}, { size = DEFAULT_SIZE, sequences: wanted = SEQUENCES, ...opts } = {}) {
   const importLib = opts.importLib ?? importLibrary;
   const file = await downloadModel(size, onProgress, opts);
   const lib = await loadLibrary(importLib);
   const llama = await (importLib === importLibrary ? sharedLlama(lib) : lib.getLlama());
   const model = await llama.loadModel({ modelPath: file });
-  let context;
+  let context, sequences;
   try {
-    context = await model.createContext({ contextSize: { max: 8192 } });
+    ({ context, sequences } = await createContext(model, wanted));
   } catch (err) {
     await model.dispose();
     throw err;
   }
-  const chat = new lib.LlamaChat({ contextSequence: context.getSequence(), chatWrapper: new lib.GemmaChatWrapper() });
-  const complete = async (prompt, { maxTokens = 2048 } = {}) => {
-    const res = await chat.generateResponse(
-      [{ type: 'user', text: prompt }, { type: 'model', response: [] }],
-      { temperature: 0, maxTokens },
-    );
-    return res.response;
+  // One chat per sequence, created when first needed; a call waits for a free one.
+  const chats = [];
+  const idle = [];
+  const waiting = [];
+  const acquire = () => {
+    if (idle.length) return Promise.resolve(idle.pop());
+    if (chats.length < sequences) {
+      const chat = new lib.LlamaChat({ contextSequence: context.getSequence(), chatWrapper: new lib.GemmaChatWrapper() });
+      chats.push(chat);
+      return Promise.resolve(chat);
+    }
+    return new Promise((resolve) => waiting.push(resolve));
   };
-  return createTranslator(complete, {
+  const release = (chat) => {
+    const next = waiting.shift();
+    if (next) next(chat);
+    else idle.push(chat);
+  };
+  const complete = async (prompt, { maxTokens = 2048 } = {}) => {
+    const chat = await acquire();
+    try {
+      const res = await chat.generateResponse(
+        [{ type: 'user', text: prompt }, { type: 'model', response: [] }],
+        { temperature: 0, maxTokens },
+      );
+      return res.response;
+    } finally {
+      release(chat);
+    }
+  };
+  try {
+    await complete(buildPrompt('Hi', 'en', 'th'), { maxTokens: 4 });
+  } catch (err) {
+    console.warn('translator: warm-up translation failed:', err?.message ?? err);
+  }
+  const translator = createTranslator(complete, {
     async dispose() {
-      chat.dispose();
+      for (const chat of chats) chat.dispose();
       await context.dispose();
       await model.dispose();
     },
   });
+  translator.concurrency = sequences;
+  return translator;
 }

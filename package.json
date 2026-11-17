@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node src/main.js",
-    "test": "node --test"
+    "test": "node --test",
+    "bench:translate": "node scripts/bench-translate.js"
   },
   "dependencies": {
     "eld": "^2.1.1",
