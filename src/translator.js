@@ -56,9 +56,12 @@ export class NotTranslatedError extends Error {
 const LIST_LINE = /^\s*(?:\d+[.)]|[-*•])\s/m;
 // CJK text is dense: one character often becomes several in a translation.
 const DENSE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
-// Latin-only output needs this many letters before its language is judged:
-// short pieces are often names ("React") kept as they are.
+// Latin-only output shorter than this many letters is judged only when it
+// has more than NAME_WORDS lowercase words: shorter pieces with fewer are
+// usually names ("Visual Studio Code") kept as they are.
 const MIN_LATIN_LETTERS = 40;
+const NAME_WORDS = 2;
+const lowercaseWords = (text) => text.match(/(?<!\p{L})\p{Ll}\p{L}+/gu)?.length ?? 0;
 
 const LATIN = /\p{Script=Latin}/u;
 // Script of each non-Latin target language; all others are written in Latin.
@@ -96,7 +99,8 @@ export function looksLikeTranslation(src, out, srcLang, tgtLang, { detect = dete
   const weight = source.length + 2 * (source.match(DENSE)?.length ?? 0);
   if (text.length > 2 * weight + 30) return false;
   const letters = text.match(/\p{L}/gu) ?? [];
-  if (letters.every((c) => LATIN.test(c)) && letters.length < MIN_LATIN_LETTERS) return true;
+  if (letters.every((c) => LATIN.test(c)) && letters.length < MIN_LATIN_LETTERS
+    && lowercaseWords(text) <= NAME_WORDS) return true;
   const script = SCRIPTS[tgtLang];
   const judged = script ? letters.filter((c) => !LATIN.test(c)) : letters;
   if (!judged.length || 2 * judged.filter((c) => (script ?? LATIN).test(c)).length < judged.length) return false;

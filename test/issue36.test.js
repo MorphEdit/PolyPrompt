@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   NotTranslatedError, buildPrompt, createTranslator, looksLikeTranslation, maxTokensFor,
 } from '../src/translator.js';
+import { translateText } from '../src/text.js';
 
 const SOURCE = 'ช่วยแนะนำวิธีนอนหลับให้ดีขึ้น 3 ข้อ แบบสั้นๆ';
 const ANSWER = '1. Establish a regular sleep schedule.\n2. Create a relaxing bedtime routine.\n'
@@ -98,4 +99,31 @@ test('a non-Latin translation full of Latin product names is kept (#36)', async 
   assert.equal(calls.length, 1);
   // An English answer for a Thai target is still rejected.
   assert.equal(looksLikeTranslation(src, 'Sure, React, Vue, Svelte and Angular work well together.', 'en', 'th'), false);
+});
+
+test('a short sentence left in English for a Thai target is retried and rejected (#36)', async () => {
+  const src = 'Please suggest 3 short tips for better sleep.';
+  const { complete, calls } = fake(src);
+  await assert.rejects(translateText(createTranslator(complete), src, 'en', 'th'), NotTranslatedError);
+  assert.equal(calls.length, 2);
+});
+
+test('a short sentence in a third Latin language is retried and rejected (#36)', async () => {
+  const { complete, calls } = fake('Bonjour, voici trois conseils.');
+  await assert.rejects(
+    translateText(createTranslator(complete), 'Here are three tips for you.', 'en', 'de'), NotTranslatedError);
+  assert.equal(calls.length, 2);
+});
+
+test('short names kept as they are and short correct translations are kept (#36)', async () => {
+  for (const [src, out, from, to] of [
+    ['Visual Studio Code', 'Visual Studio Code', 'en', 'th'],
+    ['React', 'React', 'en', 'de'],
+    ['Here are three tips for you.', 'Hier sind drei Tipps für dich.', 'en', 'de'],
+    ['Here are three tips.', 'Voici trois conseils.', 'en', 'fr'],
+  ]) {
+    const { complete, calls } = fake(out);
+    assert.equal(await translateText(createTranslator(complete), src, from, to), out, `${src} -> ${to}`);
+    assert.equal(calls.length, 1);
+  }
 });
