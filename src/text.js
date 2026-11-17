@@ -1,5 +1,6 @@
 // Pure text helpers for translating long text: splitting into pieces the
-// translator accepts and protecting code/URLs from translation.
+// translator accepts, protecting code/URLs/Markdown syntax from translation
+// and rejecting degenerate translator output.
 
 const PARAGRAPH_BREAK = /\s*\n[^\S\n]*\n\s*/g;
 // After . ! ? 。 followed by whitespace, after 。 directly, or at a newline.
@@ -81,12 +82,72 @@ export function protect(text) {
   };
 }
 
+// Markdown structure that never goes to the translator: the line prefix
+// (indent, quote, heading, list marker, task box) and inline markers
+// (emphasis, strike, table pipes, link brackets).
+const LINE_BREAK = /(\r?\n)/;
+const LINE_PREFIX = /^[^\S\n]*(?:>[^\S\n]?)*(?:#{1,6}(?=\s|$)|(?:[-*+]|\d+[.)])(?=\s)(?:\s+\[[ xX]\](?=\s))?)?[^\S\n]*/;
+const INLINE_MARKER = /(\*+|~~|(?<![\p{L}\p{N}_])_+|_+(?![\p{L}\p{N}_])|\||!?\[|\]\([^)\s]*\))/u;
+const EDGE_SPACE = /^(\s*)([\s\S]*?)(\s*)$/;
+// One unit of up to 20 chars repeated 8+ times in a row.
+const REPEAT = /(\S.{0,19}?)\1{7,}/su;
+
+const hasLetters = (text) => /\p{L}/u.test(text.replace(PLACEHOLDER, ''));
+
+function letterRatio(text) {
+  const visible = text.replace(PLACEHOLDER_LOOSE, '').replace(/\s/g, '');
+  if (!visible) return 0;
+  return (visible.match(/[\p{L}\p{M}\p{N}]/gu)?.length ?? 0) / visible.length;
+}
+
+// True when `out` looks like a broken model output for the source `src`:
+// empty, mostly symbols, one unit repeated, few tokens repeated, or far longer.
+export function isDegenerate(src, out) {
+  const text = String(out ?? '').replace(PLACEHOLDER_LOOSE, '').trim();
+  if (!text) return true;
+  if (out.length > 3 * src.length + 20) return true;
+  if (letterRatio(out) < Math.min(0.5, letterRatio(src) * 0.75)) return true;
+  if (REPEAT.test(text) && !REPEAT.test(src)) return true;
+  const tokens = text.split(/\s+/);
+  return tokens.length >= 12 && new Set(tokens).size * 4 <= tokens.length;
+}
+
+// Translate one piece; on degenerate output retry sentence by sentence, and
+// fall back to the source piece rather than show garbage.
+async function translatePiece(translator, piece, srcLang, tgtLang) {
+  if (!hasLetters(piece)) return piece;
+  const out = await translator.translate(piece, srcLang, tgtLang);
+  if (!isDegenerate(piece, out)) return out;
+  const sentences = splitAt(piece, SENTENCE_END);
+  if (sentences.length < 2) return piece;
+  let joined = '';
+  for (const { piece: s, sep } of sentences) joined += (await translatePiece(translator, s, srcLang, tgtLang)) + sep;
+  return joined;
+}
+
+// Translate a run of plain text, keeping its surrounding whitespace.
+async function translateRun(translator, run, srcLang, tgtLang, maxChars) {
+  const [, lead, body, trail] = EDGE_SPACE.exec(run);
+  if (!hasLetters(body)) return run;
+  let out = '';
+  for (const { piece, sep } of splitText(body, maxChars, { keep: PLACEHOLDER })) {
+    out += (await translatePiece(translator, piece, srcLang, tgtLang)) + sep;
+  }
+  return lead + out + trail;
+}
+
+// Translate line by line: Markdown prefixes and inline markers are kept as-is
+// and only the plain-text runs between them go to the translator.
 export async function translateText(translator, text, srcLang, tgtLang, { maxChars = 500 } = {}) {
   const { text: safe, restore } = protect(text);
   let out = '';
-  for (const { piece, sep } of splitText(safe, maxChars, { keep: PLACEHOLDER })) {
-    const onlyPlaceholders = piece.replace(PLACEHOLDER, '').trim() === '';
-    out += (onlyPlaceholders ? piece : await translator.translate(piece, srcLang, tgtLang)) + sep;
+  for (const [i, line] of safe.split(LINE_BREAK).entries()) {
+    if (i % 2) { out += line; continue; }
+    const prefix = LINE_PREFIX.exec(line)[0];
+    out += prefix;
+    for (const [j, part] of line.slice(prefix.length).split(INLINE_MARKER).entries()) {
+      out += j % 2 ? part : await translateRun(translator, part, srcLang, tgtLang, maxChars);
+    }
   }
   return restore(out);
 }
