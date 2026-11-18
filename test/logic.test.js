@@ -7,6 +7,7 @@ import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
   retryEnabled, lastMessageHasError, escapeHtml, renderMarkdown, SIZE_OPTIONS, CLAUDE_OPTIONS, formatGB,
   pickerLabel, pickerDisabled, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
+  cardDecisions, DECISION_LABELS, ONCE_ONLY_HINT,
 } from '../public/logic.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -235,4 +236,11 @@ test('picking a size: loaded does nothing, downloaded switches, missing asks fir
   assert.equal(sizePickAction({ size: '27b', model, downloadedSizes: ['4b'] }), 'confirm');
   // In the error state the saved size can be picked again.
   assert.equal(sizePickAction({ size: '4b', model: { state: 'error', size: '4b' }, downloadedSizes: ['4b'] }), 'switch');
+});
+
+test('cardDecisions drops "อนุญาตตลอดในแชตนี้" only for allow-once cards (#52)', () => {
+  assert.deepEqual(cardDecisions({ onceOnly: false }), DECISION_LABELS);
+  assert.deepEqual(cardDecisions({}), DECISION_LABELS);
+  assert.deepEqual(cardDecisions({ onceOnly: true }).map((d) => d.decision), ['allow', 'deny']);
+  assert.equal(ONCE_ONLY_HINT, 'คำสั่งนี้มีหลายคำสั่งต่อกัน อนุญาตได้ทีละครั้ง');
 });

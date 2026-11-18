@@ -2,7 +2,6 @@
 // keeps every element; new activity only adds or updates its own parts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cardDecisions, DECISION_LABELS, ONCE_ONLY_HINT } from '../public/logic.js';
 
 class El {
   constructor(tag) {
@@ -51,11 +50,7 @@ const chat = {
 const posts = [];
 let chatGets = 0;
 
-test('cardDecisions drops "อนุญาตตลอดในแชตนี้" only for allow-once cards', () => {
-  assert.deepEqual(cardDecisions({ onceOnly: false }), DECISION_LABELS);
-  assert.deepEqual(cardDecisions({}), DECISION_LABELS);
-  assert.deepEqual(cardDecisions({ onceOnly: true }).map((d) => d.decision), ['allow', 'deny']);
-});
+const HINT = 'คำสั่งนี้มีหลายคำสั่งต่อกัน อนุญาตได้ทีละครั้ง';
 
 test('polls keep unchanged chat elements; new activity and cards update only their parts', async () => {
   globalThis.document = { getElementById: (id) => (byId[id] ??= new El(id)), createElement: (t) => new El(t) };
@@ -74,6 +69,17 @@ test('polls keep unchanged chat elements; new activity and cards update only the
     return json({ error: 'not found' }, 404);
   };
 
+  try {
+    await steps();
+  } finally {
+    // End the turn so polling stops and the test process exits, even on failure.
+    chat.pendingStep = null;
+    chat.live = null;
+    await tick(1100);
+  }
+});
+
+async function steps() {
   await import('../public/app.js');
   await tick(30);
   byId.input.value = 'รันเทสต์';
@@ -149,16 +155,16 @@ test('polls keep unchanged chat elements; new activity and cards update only the
   assert.equal(allow2.disabled, false);
   assert.equal(button(byId.messages, 'อนุญาตตลอดในแชตนี้'), undefined);
   assert.ok(button(byId.messages, 'ไม่อนุญาต'));
-  assert.deepEqual(byClass(byId.messages, 'note permission-hint').map((e) => e.textContent), [ONCE_ONLY_HINT]);
+  assert.deepEqual(byClass(byId.messages, 'note permission-hint').map((e) => e.textContent), [HINT]);
   button(byId.messages, 'ไม่อนุญาต').listeners.click();
   await tick(10);
   assert.deepEqual(answers()[1].body, { token: 'tok-2', decision: 'deny' });
 
-  // End the turn so polling stops and the test process exits.
+  // The turn ends: the user message survives, the answer replaces the live block.
   chat.pendingStep = null;
   chat.live = null;
   chat.messages.push({ id: 'm2', role: 'assistant', original: 'เสร็จแล้ว' });
   await tick(2700);
   assert.equal(byId.messages.children[0], userMsg, 'the user message survives the end of the turn');
   assert.equal(byId.messages.children.length, 2);
-});
+}
