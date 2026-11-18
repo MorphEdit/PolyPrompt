@@ -48,7 +48,7 @@ const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 // Classifies one parsed stdout event:
 // { sessionId, kind: 'permission', requestId, toolName, input }
 // | { sessionId, kind: 'control', requestId }               (other control requests)
-// | { sessionId, kind: 'assistant', texts, toolUses: [{ id, name, input }] }
+// | { sessionId, kind: 'assistant', model, texts, toolUses: [{ id, name, input }] }
 // | { sessionId, kind: 'tool_results', results: [{ id, output }] }
 // | { sessionId, kind: 'result', isError, text, modelUsage, usage, total_cost_usd, duration_ms }
 // | { sessionId, kind: 'other' }
@@ -81,7 +81,8 @@ export function readEvent(ev) {
         toolUses.push({ id: b.id ?? null, name: b.name, input: isObject(b.input) ? b.input : {} });
       }
     }
-    return { sessionId, kind: 'assistant', texts, toolUses };
+    const model = typeof ev.message.model === 'string' && ev.message.model ? ev.message.model : null;
+    return { sessionId, kind: 'assistant', model, texts, toolUses };
   }
   if (ev.type === 'user' && Array.isArray(content)) {
     const results = content

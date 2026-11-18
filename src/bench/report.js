@@ -3,6 +3,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isErrorLine, judgeKey, lastBy, pairKey, readLines } from './results.js';
+import { gpuLoadText } from './gpu.js';
 import { judgeOutcome } from './judge.js';
 import { SCORED } from './run.js';
 import { bootstrapCI, discordant, mcnemar, mean, median, pairedPct, wilson } from './stats.js';
@@ -41,16 +42,23 @@ export function pairsOf(entries) {
   return { pairs, last };
 }
 
+// Raw token sums weigh a cache read like an output token; the cost (the
+// result's total_cost_usd) weighs them as billed.
+export const COST_LABEL = 'API-equivalent cost (USD)';
+
+function pairStats(p) {
+  return {
+    A: { median: median(p.map((x) => x.a)), mean: mean(p.map((x) => x.a)) },
+    B: { median: median(p.map((x) => x.b)), mean: mean(p.map((x) => x.b)) },
+    pct: pairedPct(p),
+    ci: bootstrapCI(p),
+  };
+}
+
 export function tokenStats(pairs) {
-  return Object.fromEntries(TOKEN_METRICS.map(([key]) => {
-    const p = pairs.map(({ A, B }) => ({ a: tokensOf(A)[key], b: tokensOf(B)[key] }));
-    return [key, {
-      A: { median: median(p.map((x) => x.a)), mean: mean(p.map((x) => x.a)) },
-      B: { median: median(p.map((x) => x.b)), mean: mean(p.map((x) => x.b)) },
-      pct: pairedPct(p),
-      ci: bootstrapCI(p),
-    }];
-  }));
+  const out = Object.fromEntries(TOKEN_METRICS.map(([key]) => [key, pairStats(pairs.map(({ A, B }) => ({ a: tokensOf(A)[key], b: tokensOf(B)[key] })))]));
+  out.cost = pairStats(pairs.map(({ A, B }) => ({ a: n0(A.totalCostUsd), b: n0(B.totalCostUsd) })));
+  return out;
 }
 
 export function qualityStats(pairs) {
@@ -140,9 +148,9 @@ const block = (text) => ['```text', text, '```'].join('\n');
 
 function tokenTable(t) {
   const rows = ['| tokens per item | A median | A mean | B median | B mean | B vs A (Σ) | 95% CI |', '|---|---:|---:|---:|---:|---:|---|'];
-  for (const [key, label] of TOKEN_METRICS) {
+  for (const [key, label, d] of [...TOKEN_METRICS, ['cost', COST_LABEL, 4]]) {
     const m = t[key];
-    rows.push(`| ${label} | ${fmt(m.A.median)} | ${fmt(m.A.mean)} | ${fmt(m.B.median)} | ${fmt(m.B.mean)} | ${pct(m.pct)} | ${ci(m.ci)} |`);
+    rows.push(`| ${label} | ${fmt(m.A.median, d)} | ${fmt(m.A.mean, d)} | ${fmt(m.B.median, d)} | ${fmt(m.B.mean, d)} | ${pct(m.pct)} | ${ci(m.ci)} |`);
   }
   return rows.join('\n');
 }
@@ -215,7 +223,8 @@ export function renderReport({ meta, report, sample }) {
   const m = meta.machine ?? {};
   out.push(`- date: ${meta.date}`, `- seed: ${meta.seed ?? sample?.seed}`, `- Claude model: ${meta.model} (judge: ${meta.judgeModel})`,
     `- Claude Code: ${meta.claudeVersion ?? 'n/a'}`, `- claude args: \`${(meta.claudeArgs ?? []).join(' ')}\``,
-    `- translator: TranslateGemma ${meta.translator}`, `- machine: CPU ${m.cpu ?? 'n/a'}, GPU ${m.gpu ?? 'n/a'}, VRAM ${m.vram ?? 'n/a'}`);
+    `- translator: TranslateGemma ${meta.translator}`, `- machine: CPU ${m.cpu ?? 'n/a'}, GPU ${m.gpu ?? 'n/a'}, VRAM ${m.vram ?? 'n/a'}`,
+    `- GPU load at start: ${'gpuLoad' in m ? gpuLoadText(m.gpuLoad) : 'not recorded'}`);
   for (const [set, d] of Object.entries(meta.datasets ?? {})) out.push(`- ${set}: \`${d.repo}\` rev \`${d.rev}\` (${d.files.join(', ')})`);
   out.push('', '### Prompts', '');
   for (const [set, p] of Object.entries(meta.prompts ?? {})) out.push(`${set}:`, '', block(p), '');
