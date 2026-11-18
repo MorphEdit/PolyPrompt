@@ -1,5 +1,5 @@
 // Claude Code stream-json protocol (`--input-format stream-json`,
-// `--output-format stream-json`, `--permission-prompts host`). Every line the
+// `--output-format stream-json`, `--permission-prompt-tool stdio`). Every line the
 // runner reads from or writes to `claude` is parsed or built here, so the
 // format can be adjusted in one place if the real CLI differs.
 

@@ -60,12 +60,13 @@ export const WEB_TOOLS = 'WebSearch,WebFetch';
 export const FOLDER_ALLOWED_TOOLS = 'Read,Glob,Grep,LS,NotebookRead,WebSearch,WebFetch';
 
 // Never bypassPermissions: every other tool call reaches the app as a
-// control_request (--permission-prompts host), unless the folder's own
-// Claude Code settings allow it.
+// can_use_tool control_request (--permission-prompt-tool stdio, as the Agent
+// SDK does), unless the folder's own Claude Code settings allow it. Without
+// it the real CLI denies such calls silently (permission_denials).
 export function buildArgs(sessionId, model = 'default', folder = null) {
   const args = [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-    '--permission-prompts', 'host',
+    '--permission-prompt-tool', 'stdio',
   ];
   if (folder) {
     // Normal Claude Code in the folder: default prompt, settings, MCP and tools.
