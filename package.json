@@ -10,10 +10,15 @@
   "scripts": {
     "start": "node src/main.js",
     "test": "node --test",
-    "bench:translate": "node scripts/bench-translate.js"
+    "bench:translate": "node scripts/bench-translate.js",
+    "bench:tokens": "node scripts/bench-tokens.js",
+    "bench:report": "node scripts/bench-report.js"
   },
   "dependencies": {
     "eld": "^2.1.1",
     "node-llama-cpp": "^3.22.3"
+  },
+  "devDependencies": {
+    "hyparquet": "^1.33.1"
   }
 }
