@@ -50,7 +50,7 @@ const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 // | { sessionId, kind: 'control', requestId }               (other control requests)
 // | { sessionId, kind: 'assistant', texts, toolUses: [{ id, name, input }] }
 // | { sessionId, kind: 'tool_results', results: [{ id, output }] }
-// | { sessionId, kind: 'result', isError, text }
+// | { sessionId, kind: 'result', isError, text, modelUsage, usage, total_cost_usd, duration_ms }
 // | { sessionId, kind: 'other' }
 export function readEvent(ev) {
   const sessionId = typeof ev.session_id === 'string' && ev.session_id ? ev.session_id : null;
@@ -66,6 +66,9 @@ export function readEvent(ev) {
     return {
       sessionId, kind: 'result', isError: ev.is_error === true, text: typeof ev.result === 'string' ? ev.result : null,
       modelUsage: isObject(ev.modelUsage) ? ev.modelUsage : null,
+      usage: isObject(ev.usage) ? ev.usage : null,
+      total_cost_usd: typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : null,
+      duration_ms: typeof ev.duration_ms === 'number' ? ev.duration_ms : null,
     };
   }
   const content = ev.message?.content;

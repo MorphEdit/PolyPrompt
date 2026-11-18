@@ -159,6 +159,17 @@ export function answeringModel(data) {
   return best;
 }
 
+// Usage figures of a parsed result event, only those it has (so a result
+// without them resolves the same object as before).
+function usageOf(result) {
+  const out = {};
+  if (result?.usage) out.usage = result.usage;
+  if (result?.modelUsage) out.modelUsage = result.modelUsage;
+  if (result?.total_cost_usd != null) out.totalCostUsd = result.total_cost_usd;
+  if (result?.duration_ms != null) out.durationMs = result.duration_ms;
+  return out;
+}
+
 function isDirectory(dir) {
   try {
     return statSync(dir).isDirectory();
@@ -177,13 +188,18 @@ function isDirectory(dir) {
 //   filled in later on the same object;
 // - onPermission({ requestId, toolName, input }) -> 'allow' | 'deny' (or a
 //   promise of it). The idle timeout is paused while a request is open.
-// Resolves { text, sessionId } (the text Claude wrote, joined).
-export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd = defaultClaudeHome(), graceMs = 300 } = {}) {
+// Resolves { text, sessionId } (the text Claude wrote, joined), plus model,
+// usage, modelUsage, totalCostUsd and durationMs when the result event has them.
+// A `failed` error after a result event or stderr output carries that text as
+// err.output (and the result's usage figures, when any).
+// extraArgs are appended after buildArgs (the benchmark's
+// --no-session-persistence); the app passes none.
+export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd = defaultClaudeHome(), graceMs = 300, extraArgs = [] } = {}) {
   function run({ prompt, sessionId, model, folder = null, signal, onSession, onActivity, onPermission } = {}) {
     return new Promise((resolve, reject) => {
       let target;
       try {
-        target = resolveCommand(command, buildArgs(sessionId, model, folder));
+        target = resolveCommand(command, [...buildArgs(sessionId, model, folder), ...extraArgs]);
         if (folder) {
           if (!isDirectory(folder)) throw new ClaudeError('folder_missing');
         } else {
@@ -324,7 +340,7 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
         if (ok) {
           const answer = { text: texts.length ? texts.join('\n\n') : result.text, sessionId: result.sessionId ?? null };
           const answered = answeringModel(result);
-          return finish(null, answered ? { ...answer, model: answered } : answer);
+          return finish(null, { ...(answered ? { ...answer, model: answered } : answer), ...usageOf(result) });
         }
         // On Windows cmd.exe reports a missing command with exit code 9009.
         if (process.platform === 'win32' && code === 9009 && !result) return finish(new ClaudeError('cli_missing'));
@@ -337,7 +353,12 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
         }
         if (AUTH.test(stderr) || AUTH.test(resultText)) return finish(new ClaudeError('not_logged_in'));
         const detail = code !== 0 ? `exit ${code}` : result ? 'is_error' : junk ? 'invalid JSON' : 'no result';
-        finish(new ClaudeError('failed', detail));
+        const err = new ClaudeError('failed', detail);
+        if (result || stderr) {
+          err.output = [resultText, stderr].filter(Boolean).join('\n');
+          Object.assign(err, usageOf(result));
+        }
+        finish(err);
       });
       arm();
       write(userLine(prompt));

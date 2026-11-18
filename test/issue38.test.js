@@ -79,7 +79,14 @@ test('#38 picker lists Fable and versioned names in order, each with a one-line 
 
 test('#38 the runner reports the model that answered from modelUsage', async () => {
   const answer = await createClaudeRunner({ command: fx('model-usage.mjs') }).run({ prompt: 'a', model: 'claude-fable-5-2' });
-  assert.deepEqual(answer, { text: 'hi', sessionId: 's2', model: 'claude-opus-5-5' });
+  assert.deepEqual(answer, {
+    text: 'hi', sessionId: 's2', model: 'claude-opus-5-5',
+    // #57: the result's modelUsage is passed on as well.
+    modelUsage: {
+      'claude-haiku-5-5': { inputTokens: 300, outputTokens: 12 },
+      'claude-opus-5-5': { inputTokens: 40, outputTokens: 250 },
+    },
+  });
   const plain = await createClaudeRunner({ command: fx('ok.mjs') }).run({ prompt: 'a' });
   assert.equal('model' in plain, false, 'no modelUsage, no model');
 });

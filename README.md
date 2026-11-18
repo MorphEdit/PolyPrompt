@@ -84,3 +84,26 @@ permission card doesn't count), the message stays in the chat with an error and 
   sessions (from `~/.claude/projects`, or `CLAUDE_PROJECTS_DIR`). Opening one
   shows it translated to Thai (cached in `data/claude-sessions/`); typing in it
   continues that session in PolyPrompt.
+
+## Token benchmark
+
+Does PolyPrompt save tokens, and what does it cost in quality? `npm run bench:tokens`
+sends the same Thai items to Claude directly (A) and through PolyPrompt (B), with the
+same model and the same `claude` args, and writes every raw result to
+`bench/results/<run>/`. `npm run bench:report -- --run <id>` then writes `REPORT.md`
+there: tokens, accuracy, a blind judge for open questions, time and failures.
+
+```
+npm run bench:tokens -- [--sets mgsm,belebele,open] [--model claude-opus-5-5]
+  [--judge-model claude-opus-5-5] [--translator 4b] [--limit N] [--concurrency 1]
+  [--run <id>] [--retry-failed]
+npm run bench:report -- --run <id>
+```
+
+- The items come from three public datasets at pinned revisions (MGSM, Belebele,
+  WangchanThaiInstruct), checked by SHA-256 and cached in `.cache/bench/`. The
+  frozen, seeded sample is `bench/sample.json`.
+- Rerunning with the same `--run` resumes; `--retry-failed` reruns only the
+  failed items. When Claude's usage quota runs out the run stops (exit code 2)
+  and can be resumed later with the same `--run`.
+- It uses real Claude calls and your quota; it is not part of `npm test`.
