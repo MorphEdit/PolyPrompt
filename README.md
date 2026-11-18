@@ -51,11 +51,12 @@ Both choices are saved in `data/settings.json` (next to the chats folder) and ke
   optional downloads: picking one that is not downloaded asks first, then downloads it in the
   background while the current model keeps translating, and switches when it is done. If the new
   size cannot be loaded (for example not enough memory), the app goes back to the previous size.
-- **Claude:** "ค่าเริ่มต้น" (Claude Code's own default), Fable 5.1, Opus 5.5,
+- **Claude:** "ค่าเริ่มต้น" (Claude Code's own default), Fable 5.2, Opus 5.5,
   Sonnet 5.5 or Haiku 5.5 (passed as full model IDs; the list is in `public/models.js`). The choice
   applies from the next message; the chat keeps its Claude session. Each answer shows which model
   wrote it when that is not the picked one. If Claude refuses the picked model, the chat shows the
-  error and the picker goes back to the previous model.
+  error and the picker goes back to the previous model; when the installed Claude Code is too old
+  for the model, the message says to run `claude update`.
 
 ## Claude Code
 

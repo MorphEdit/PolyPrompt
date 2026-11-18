@@ -15,7 +15,7 @@ import { createChatStore } from '../src/store.js';
 import { answeredByLabel, CLAUDE_OPTIONS, pickerLabel } from '../public/logic.js';
 import { listen, request, tick } from './helpers.js';
 
-const IDS = ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+const IDS = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
 const fx = (name) => path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'claude', name);
 
 async function tempDir(t) {
@@ -45,7 +45,7 @@ test('#38 PUT /api/settings takes the full IDs and answers 400 for aliases and o
     assert.equal(r.status, 200, id);
     assert.equal(r.json.claudeModel, id);
   }
-  for (const bad of ['opus', 'sonnet', 'haiku', 'fable', 'claude-fable-5-2', 'gpt']) {
+  for (const bad of ['opus', 'sonnet', 'haiku', 'fable', 'claude-fable-5-9', 'gpt']) {
     assert.equal((await put(bad)).status, 400, bad);
   }
   assert.equal(settings.get().claudeModel, 'default');
@@ -72,13 +72,13 @@ test('#38 old alias values migrate to full IDs on read', async (t) => {
 
 test('#38 picker lists Fable and versioned names in order, each with a one-line Thai hint', () => {
   assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.value), ['default', ...IDS]);
-  assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.label), ['ค่าเริ่มต้น', 'Fable 5.1', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5']);
+  assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.label), ['ค่าเริ่มต้น', 'Fable 5.2', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5']);
   for (const o of CLAUDE_OPTIONS) assert.match(o.hint, /^[^\n]*[฀-๿][^\n]*$/, o.value);
-  assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'claude-fable-5-1' }), 'แปล 4B · Claude Fable 5.1');
+  assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'claude-fable-5-2' }), 'แปล 4B · Claude Fable 5.2');
 });
 
 test('#38 the runner reports the model that answered from modelUsage', async () => {
-  const answer = await createClaudeRunner({ command: fx('model-usage.mjs') }).run({ prompt: 'a', model: 'claude-fable-5-1' });
+  const answer = await createClaudeRunner({ command: fx('model-usage.mjs') }).run({ prompt: 'a', model: 'claude-fable-5-2' });
   assert.deepEqual(answer, { text: 'hi', sessionId: 's2', model: 'claude-opus-5-5' });
   const plain = await createClaudeRunner({ command: fx('ok.mjs') }).run({ prompt: 'a' });
   assert.equal('model' in plain, false, 'no modelUsage, no model');
@@ -86,13 +86,13 @@ test('#38 the runner reports the model that answered from modelUsage', async () 
 
 test('#38 a model Claude refuses is a model_rejected error', async () => {
   await assert.rejects(
-    createClaudeRunner({ command: fx('model-rejected.mjs') }).run({ prompt: 'a', model: 'claude-fable-5-1' }),
-    (err) => err instanceof ClaudeError && err.kind === 'model_rejected' && /claude-fable-5-1/.test(err.message),
+    createClaudeRunner({ command: fx('model-rejected.mjs') }).run({ prompt: 'a', model: 'claude-fable-5-2' }),
+    (err) => err instanceof ClaudeError && err.kind === 'model_rejected' && /claude-fable-5-2/.test(err.message),
   );
 });
 
 test('#38 "ตอบโดย" shows the answering model when it is not the one picked', () => {
-  assert.equal(answeredByLabel({ model: 'claude-opus-5-5', requestedModel: 'claude-fable-5-1' }), 'ตอบโดย claude-opus-5-5');
+  assert.equal(answeredByLabel({ model: 'claude-opus-5-5', requestedModel: 'claude-fable-5-2' }), 'ตอบโดย claude-opus-5-5');
   assert.equal(answeredByLabel({ model: 'claude-opus-5-5', requestedModel: 'default' }), 'ตอบโดย claude-opus-5-5');
   assert.equal(answeredByLabel({ model: 'claude-opus-5-5', requestedModel: 'claude-opus-5-5' }), '');
   assert.equal(answeredByLabel({ original: 'old answer' }), '');
@@ -120,25 +120,25 @@ async function pipeline(t, run) {
 
 test('#38 the answering model is stored with the assistant message', async (t) => {
   const s = await pipeline(t, async () => ({ text: 'Hi', sessionId: 's1', model: 'claude-opus-5-5' }));
-  await s.settings.update({ claudeModel: 'claude-fable-5-1' });
+  await s.settings.update({ claudeModel: 'claude-fable-5-2' });
   const chat = await s.turn('Hello');
   const reply = chat.messages.at(-1);
   assert.equal(reply.role, 'assistant');
   assert.equal(reply.model, 'claude-opus-5-5');
-  assert.equal(reply.requestedModel, 'claude-fable-5-1');
+  assert.equal(reply.requestedModel, 'claude-fable-5-2');
   assert.equal(answeredByLabel(reply), 'ตอบโดย claude-opus-5-5');
 });
 
 test('#38 a refused model shows the error in the chat and puts the previous selection back', async (t) => {
   const s = await pipeline(t, async ({ model }) => { throw new ClaudeError('model_rejected', model); });
   await s.settings.update({ claudeModel: 'claude-sonnet-5-5' });
-  await s.settings.update({ claudeModel: 'claude-fable-5-1' });
+  await s.settings.update({ claudeModel: 'claude-fable-5-2' });
   const chat = await s.turn('Hello');
-  assert.equal(s.runs[0].model, 'claude-fable-5-1');
+  assert.equal(s.runs[0].model, 'claude-fable-5-2');
   const last = chat.messages.at(-1);
   assert.equal(last.role, 'user');
   assert.equal(last.error.kind, 'model_rejected');
-  assert.match(last.error.message, /claude-fable-5-1/);
+  assert.match(last.error.message, /claude-fable-5-2/);
   assert.equal(s.settings.get().claudeModel, 'claude-sonnet-5-5');
   assert.equal(JSON.parse(await readFile(s.settings.file, 'utf8')).claudeModel, 'claude-sonnet-5-5');
 });
@@ -146,10 +146,10 @@ test('#38 a refused model shows the error in the chat and puts the previous sele
 test('#38 a refused model is not reverted when the user already picked another one', async (t) => {
   const dir = await tempDir(t);
   const settings = await createSettingsStore({ file: path.join(dir, 'settings.json') });
-  await settings.update({ claudeModel: 'claude-fable-5-1' });
+  await settings.update({ claudeModel: 'claude-fable-5-2' });
   await settings.update({ claudeModel: 'claude-haiku-5-5' });
-  await settings.revertClaudeModel('claude-fable-5-1');
+  await settings.revertClaudeModel('claude-fable-5-2');
   assert.equal(settings.get().claudeModel, 'claude-haiku-5-5');
   await settings.revertClaudeModel('claude-haiku-5-5');
-  assert.equal(settings.get().claudeModel, 'claude-fable-5-1');
+  assert.equal(settings.get().claudeModel, 'claude-fable-5-2');
 });

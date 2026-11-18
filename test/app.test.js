@@ -89,7 +89,7 @@ test('the model picker shows both choices, saves on change and follows the model
   const [b4, b12, b27, cDefault, cFable, cOpus] = pickerButtons();
   assert.equal(pickerButtons().length, 8);
   assert.equal(cDefault.children[0].textContent, 'ค่าเริ่มต้น');
-  assert.equal(cFable.children[0].textContent, 'Fable 5.1');
+  assert.equal(cFable.children[0].textContent, 'Fable 5.2');
   assert.equal(b4.children[0].textContent, '4B · ดาวน์โหลดแล้ว');
   assert.equal(b12.children[0].textContent, '12B · 7.3 GB');
   assert.equal([b4, b12, b27].some((b) => b.disabled), false);

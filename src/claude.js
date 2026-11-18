@@ -17,12 +17,18 @@ const MESSAGES = {
   timeout: 'Claude ไม่ตอบภายในเวลาที่กำหนด กรุณาลองส่งใหม่',
   failed: 'เรียก Claude ไม่สำเร็จ',
   model_rejected: 'Claude ไม่รับโมเดลที่เลือก (อาจไม่มีโมเดลนี้ หรือบัญชีนี้ใช้ไม่ได้) จึงกลับไปใช้โมเดลก่อนหน้า กรุณาลองส่งใหม่',
+  cli_too_old: 'Claude Code ในเครื่องเก่าเกินไปสำหรับโมเดลนี้ ให้รัน `claude update` แล้วลองใหม่',
   folder_missing: 'ไม่พบโฟลเดอร์ของแชตนี้ (อาจถูกลบหรือย้าย) จึงส่งต่อไม่ได้ กรุณาเริ่มแชตใหม่',
 };
 const AUTH = /log ?in|auth/i;
 // `claude -p --model <unknown>` answers is_error with api_error_status 404
-// and "There's an issue with the selected model (...)".
-const MODEL_REJECTED = /selected model|unrecognized_model/i;
+// and "There's an issue with the selected model (...)". A newer CLI also
+// prints a harmless `unrecognized_model` line on stderr for models it does
+// not know yet, even when the run succeeds, so stderr alone proves nothing.
+const MODEL_REJECTED = /selected model/i;
+// An older CLI refuses a newer model: "Claude Code 2.1.150 does not support
+// this model; version 2.1.290 or newer is required. Run 'claude update' ...".
+const CLI_TOO_OLD = /does not support this model|or newer is required/i;
 const NODE_SCRIPT = /\.[cm]?js$/i;
 // Args reaching cmd.exe (fallback for unparsable .cmd shims) are only our
 // fixed flags, the comma-separated tool lists, SYSTEM_PROMPT and the session
@@ -44,8 +50,9 @@ export function defaultClaudeHome() {
 }
 
 export class ClaudeError extends Error {
-  constructor(kind, detail) {
-    super(detail ? `${MESSAGES[kind]} (${detail})` : MESSAGES[kind]);
+  // text overrides the kind's message (same kind, more specific wording).
+  constructor(kind, detail, text = MESSAGES[kind]) {
+    super(detail ? `${text} (${detail})` : text);
     this.kind = kind;
   }
 }
@@ -321,6 +328,10 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
         }
         // On Windows cmd.exe reports a missing command with exit code 9009.
         if (process.platform === 'win32' && code === 9009 && !result) return finish(new ClaudeError('cli_missing'));
+        // model_rejected kind, so the pipeline reverts the picker as well.
+        if (CLI_TOO_OLD.test(stderr) || CLI_TOO_OLD.test(resultText)) {
+          return finish(new ClaudeError('model_rejected', null, MESSAGES.cli_too_old));
+        }
         if (MODEL_REJECTED.test(stderr) || MODEL_REJECTED.test(resultText)) {
           return finish(new ClaudeError('model_rejected', model));
         }
