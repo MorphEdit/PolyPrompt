@@ -4,6 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PolyPrompt</title>
+  <script>
+    // Apply the saved theme before the stylesheet paints: dark unless "light" was saved.
+    (function () {
+      var theme = 'dark';
+      try {
+        if (localStorage.getItem('polyprompt.theme') === 'light') theme = 'light';
+      } catch (e) {}
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -14,6 +24,7 @@
     <ul id="chat-list" class="chat-list"></ul>
     <div id="old-sessions-label" class="sidebar-label" hidden>แชตเก่าจาก Claude Code</div>
     <ul id="old-sessions" class="chat-list old-sessions" hidden></ul>
+    <button id="theme-toggle" class="theme-toggle" type="button"></button>
   </aside>
   <main class="main">
     <header class="chat-header">

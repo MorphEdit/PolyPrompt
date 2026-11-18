@@ -3,7 +3,7 @@ import {
   retryEnabled, lastMessageHasError, renderMarkdown, SIZE_OPTIONS, CLAUDE_OPTIONS, formatGB,
   pickerLabel, pickerDisabled, answeredByLabel, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
   STOPPED_NOTE, TRUNCATED_NOTE, DECISION_LABELS, canStop, currentFolder, canPickFolder, sendBody,
-  sessionProgress, shortDate,
+  sessionProgress, shortDate, nextTheme, themeToggleLabel, themeToggleIcon, loadTheme, saveTheme,
 } from './logic.js';
 
 const POLL_MS = 1000;
@@ -33,6 +33,7 @@ const els = {
   folderList: $('folder-list'),
   folderCancel: $('folder-cancel'),
   folderChoose: $('folder-choose'),
+  themeToggle: $('theme-toggle'),
 };
 
 const state = {
@@ -295,6 +296,24 @@ async function retryModel() {
     showError(err);
   }
   loadStatus();
+}
+
+// ---- theme ----
+
+const storage = () => localStorage;
+let theme = loadTheme(storage);
+
+function applyTheme() {
+  document.documentElement?.setAttribute('data-theme', theme);
+  els.themeToggle.textContent = themeToggleIcon(theme);
+  els.themeToggle.title = themeToggleLabel(theme);
+  els.themeToggle.setAttribute('aria-label', themeToggleLabel(theme));
+}
+
+function toggleTheme() {
+  theme = nextTheme(theme);
+  saveTheme(storage, theme);
+  applyTheme();
 }
 
 // ---- sidebar ----
@@ -801,6 +820,7 @@ function autoGrow() {
 }
 
 els.newChat.addEventListener('click', newChat);
+els.themeToggle.addEventListener('click', toggleTheme);
 els.picker.addEventListener('click', togglePicker);
 els.stop.addEventListener('click', stopTurn);
 els.folderButton.addEventListener('click', openFolderPicker);
@@ -822,6 +842,7 @@ els.input.addEventListener('input', () => {
   updateComposer();
 });
 
+applyTheme();
 renderChat();
 renderModel();
 loadStatus();

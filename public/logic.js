@@ -276,3 +276,40 @@ export function shortDate(iso) {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
 }
+
+// ---- theme (#50): dark by default, "light" only when saved as such ----
+export const THEME_KEY = 'polyprompt.theme';
+
+export function normalizeTheme(value) {
+  return value === 'light' ? 'light' : 'dark';
+}
+
+export function nextTheme(theme) {
+  return normalizeTheme(theme) === 'dark' ? 'light' : 'dark';
+}
+
+// The toggle names the theme it switches to.
+export function themeToggleLabel(theme) {
+  return normalizeTheme(theme) === 'dark' ? 'โหมดสว่าง' : 'โหมดมืด';
+}
+
+export function themeToggleIcon(theme) {
+  return normalizeTheme(theme) === 'dark' ? '☀' : '☾';
+}
+
+// getStorage returns localStorage; reading it may throw (private mode, blocked storage).
+export function loadTheme(getStorage) {
+  try {
+    return normalizeTheme(getStorage().getItem(THEME_KEY));
+  } catch {
+    return 'dark';
+  }
+}
+
+export function saveTheme(getStorage, theme) {
+  try {
+    getStorage().setItem(THEME_KEY, normalizeTheme(theme));
+  } catch {
+    // Storage unavailable: the theme still applies for this session.
+  }
+}
