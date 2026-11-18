@@ -2,7 +2,7 @@ import {
   keyAction, canSend, stepLabel, formatProgress, apiErrorMessage, canRetry,
   retryEnabled, lastMessageHasError, renderMarkdown, SIZE_OPTIONS, CLAUDE_OPTIONS, formatGB,
   pickerLabel, pickerDisabled, answeredByLabel, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
-  STOPPED_NOTE, TRUNCATED_NOTE, DECISION_LABELS, canStop, currentFolder, canPickFolder, sendBody,
+  STOPPED_NOTE, TRUNCATED_NOTE, ONCE_ONLY_HINT, cardDecisions, canStop, currentFolder, canPickFolder, sendBody,
   sessionProgress, shortDate, nextTheme, themeToggleLabel, themeToggleIcon, loadTheme, saveTheme,
 } from './logic.js';
 
@@ -55,6 +55,12 @@ const state = {
 let chatPollTimer = null;
 let sessionPollTimer = null;
 let retryButton = null; // the "ส่งใหม่" button of the open chat, if any
+// Keyed rendering (#52): a poll touches only what changed, so a waiting card's
+// buttons, open <details> and text selections stay in place.
+const messageViews = new Map(); // key -> { sig, el, retry }
+let liveView = null; // { chatId, wrap, activity: { box, summary, lines }, card: { key, el, buttons } }
+let emptyEl = null;
+let sessionNoteEl = null;
 let statusPollTimer = null;
 
 class ApiError extends Error {
@@ -432,6 +438,38 @@ function renderMessage(m, index, messages) {
   return wrap;
 }
 
+// Sets parent's children to items, touching the DOM only where they differ.
+function syncChildren(parent, items) {
+  const current = Array.from(parent.children);
+  if (current.length <= items.length && current.every((c, i) => c === items[i])) {
+    if (items.length > current.length) parent.append(...items.slice(current.length));
+    return;
+  }
+  parent.replaceChildren(...items);
+}
+
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+const isDetails = (el) => el.tagName?.toLowerCase() === 'details';
+
+function detailsIn(el, out = []) {
+  if (isDetails(el)) out.push(el);
+  for (const c of Array.from(el.children ?? [])) detailsIn(c, out);
+  return out;
+}
+
+// A re-rendered element keeps the open/closed state the user gave its <details>.
+function keepOpen(from, to) {
+  const before = detailsIn(from);
+  detailsIn(to).forEach((d, i) => {
+    if (before[i]?.className === d.className) d.open = before[i].open;
+  });
+}
+
+const activitySummary = (count) => `กิจกรรมของ Claude (${count})`;
+
 // Activity lines: fixed Thai text, with the raw English detail and the tool
 // output (collapsed) inside. Nothing here is translated.
 function activityBlock(lines, open) {
@@ -439,35 +477,36 @@ function activityBlock(lines, open) {
   box.className = 'activity';
   box.open = open;
   const summary = document.createElement('summary');
-  summary.textContent = `กิจกรรมของ Claude (${lines.length})`;
-  box.append(summary);
-  for (const line of lines) {
-    const item = document.createElement('details');
-    item.className = 'activity-line';
-    const head = document.createElement('summary');
-    head.textContent = line.text;
-    const detail = document.createElement('pre');
-    detail.textContent = line.detail ?? '';
-    item.append(head, detail);
-    if (line.output) {
-      const output = document.createElement('details');
-      output.className = 'activity-output';
-      const label = document.createElement('summary');
-      label.textContent = 'ผลลัพธ์';
-      const body = document.createElement('pre');
-      body.textContent = line.output;
-      output.append(label, body);
-      if (line.truncated) {
-        const note = document.createElement('div');
-        note.className = 'note';
-        note.textContent = TRUNCATED_NOTE;
-        output.append(note);
-      }
-      item.append(output);
-    }
-    box.append(item);
-  }
+  summary.textContent = activitySummary(lines.length);
+  box.append(summary, ...lines.map(activityLine));
   return box;
+}
+
+function activityLine(line) {
+  const item = document.createElement('details');
+  item.className = 'activity-line';
+  const head = document.createElement('summary');
+  head.textContent = line.text;
+  const detail = document.createElement('pre');
+  detail.textContent = line.detail ?? '';
+  item.append(head, detail);
+  if (line.output) {
+    const output = document.createElement('details');
+    output.className = 'activity-output';
+    const label = document.createElement('summary');
+    label.textContent = 'ผลลัพธ์';
+    const body = document.createElement('pre');
+    body.textContent = line.output;
+    output.append(label, body);
+    if (line.truncated) {
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = TRUNCATED_NOTE;
+      output.append(note);
+    }
+    item.append(output);
+  }
+  return item;
 }
 
 // The open permission card: Thai text, the exact English action, three buttons.
@@ -482,7 +521,8 @@ function cardBlock(card) {
   detail.textContent = card.detail;
   const actions = document.createElement('div');
   actions.className = 'permission-actions';
-  for (const { decision, label } of DECISION_LABELS) {
+  const buttons = [];
+  for (const { decision, label } of cardDecisions(card)) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = `permission-${decision}`;
@@ -490,17 +530,75 @@ function cardBlock(card) {
     b.disabled = state.answering;
     b.addEventListener('click', () => answerCard(card, decision));
     actions.append(b);
+    buttons.push(b);
   }
-  box.append(text, detail, actions);
-  return box;
+  box.append(text, detail);
+  if (card.onceOnly) {
+    const hint = document.createElement('div');
+    hint.className = 'note permission-hint';
+    hint.textContent = ONCE_ONLY_HINT;
+    box.append(hint);
+  }
+  box.append(actions);
+  return { el: box, buttons };
 }
 
-function liveBlock(live) {
-  const wrap = document.createElement('div');
-  wrap.className = 'msg assistant live';
-  if (live.activity.length) wrap.append(activityBlock(live.activity, true));
-  if (live.card) wrap.append(cardBlock(live.card));
-  return wrap;
+// A message's element, reused while its data is unchanged.
+function messageEl(m, index, messages, key) {
+  const sig = JSON.stringify([m, Boolean(m.error) && canRetry(messages, index)]);
+  const old = messageViews.get(key);
+  if (old?.sig === sig) {
+    retryButton = old.retry ?? retryButton;
+    return old.el;
+  }
+  const before = retryButton;
+  retryButton = null;
+  const view = { sig, el: renderMessage(m, index, messages), retry: retryButton };
+  retryButton = retryButton ?? before;
+  if (old) keepOpen(old.el, view.el);
+  messageViews.set(key, view);
+  return view.el;
+}
+
+// The turn in progress: one element per chat, updated in place. New activity
+// lines are appended and the card is rebuilt only when another one opens.
+function liveBlock(live, chatId) {
+  if (liveView?.chatId !== chatId) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg assistant live';
+    liveView = { chatId, wrap, activity: null, card: null };
+  }
+  const items = [];
+  if (live.activity.length) {
+    if (!liveView.activity) {
+      const box = activityBlock([], true);
+      liveView.activity = { box, summary: box.children[0], lines: [] };
+    }
+    const view = liveView.activity;
+    setText(view.summary, activitySummary(live.activity.length));
+    view.lines = live.activity.map((line, i) => {
+      const sig = JSON.stringify(line);
+      const old = view.lines[i];
+      if (old?.sig === sig) return old;
+      const el = activityLine(line);
+      if (old) keepOpen(old.el, el);
+      return { sig, el };
+    });
+    syncChildren(view.box, [view.summary, ...view.lines.map((l) => l.el)]);
+    items.push(view.box);
+  } else {
+    liveView.activity = null;
+  }
+  if (live.card) {
+    const key = `${live.card.requestId}\n${live.card.token}`;
+    if (liveView.card?.key !== key) liveView.card = { key, ...cardBlock(live.card) };
+    for (const b of liveView.card.buttons) if (b.disabled !== state.answering) b.disabled = state.answering;
+    items.push(liveView.card.el);
+  } else {
+    liveView.card = null;
+  }
+  syncChildren(liveView.wrap, items);
+  return liveView.wrap;
 }
 
 function renderHeader() {
@@ -518,21 +616,33 @@ function renderChat() {
     ? state.session.messages.map((m) => ({ ...m, original: m.original ?? m.english }))
     : state.chat?.messages ?? [];
   retryButton = null;
-  const items = messages.map(renderMessage);
+  const scope = state.session ? `s:${state.session.id}` : `c:${state.chat?.id}`;
+  const keys = new Set();
+  const items = messages.map((m, i, all) => {
+    const key = `${scope}:${m.id ?? i}`;
+    keys.add(key);
+    return messageEl(m, i, all, key);
+  });
+  for (const key of messageViews.keys()) if (!keys.has(key)) messageViews.delete(key);
   if (state.session?.note) {
-    const note = document.createElement('div');
-    note.className = 'note';
-    note.textContent = state.session.note;
-    items.unshift(note);
+    if (!sessionNoteEl) {
+      sessionNoteEl = document.createElement('div');
+      sessionNoteEl.className = 'note';
+    }
+    setText(sessionNoteEl, state.session.note);
+    items.unshift(sessionNoteEl);
   }
-  if (state.chat?.live) items.push(liveBlock(state.chat.live));
+  if (state.chat?.live) items.push(liveBlock(state.chat.live, state.chat.id));
+  else liveView = null;
   if (items.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = 'วันนี้ให้ช่วยอะไรดี?';
-    items.push(empty);
+    if (!emptyEl) {
+      emptyEl = document.createElement('div');
+      emptyEl.className = 'empty';
+      emptyEl.textContent = 'วันนี้ให้ช่วยอะไรดี?';
+    }
+    items.push(emptyEl);
   }
-  els.messages.replaceChildren(...items);
+  syncChildren(els.messages, items);
   if (atBottom) els.messages.scrollTop = els.messages.scrollHeight;
   renderHeader();
   renderChatList();

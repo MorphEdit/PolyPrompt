@@ -240,6 +240,14 @@ export const DECISION_LABELS = [
   { decision: 'deny', label: 'ไม่อนุญาต' },
 ];
 
+export const ONCE_ONLY_HINT = 'คำสั่งนี้มีหลายคำสั่งต่อกัน อนุญาตได้ทีละครั้ง';
+
+// The buttons of a permission card: no "อนุญาตตลอดในแชตนี้" when the server
+// flags the request as allow-once (a Bash command with shell operators).
+export function cardDecisions(card) {
+  return card?.onceOnly ? DECISION_LABELS.filter((d) => d.decision !== 'allow_chat') : DECISION_LABELS;
+}
+
 // "หยุด" only while `claude` runs (the thinking step).
 export function canStop(chat) {
   return chat?.pendingStep === 'thinking';
