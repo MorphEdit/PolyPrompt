@@ -107,3 +107,37 @@ npm run bench:report -- --run <id>
   failed items. When Claude's usage quota runs out the run stops (exit code 2)
   and can be resumed later with the same `--run`.
 - It uses real Claude calls and your quota; it is not part of `npm test`.
+
+### Results (2026-11-18, Opus 5.5, TranslateGemma 4B)
+
+Full report: [`bench/results/full-2026-11-18/REPORT.md`](bench/results/full-2026-11-18/REPORT.md).
+Every request and answer is in the `.jsonl` files next to it.
+
+**In short: PolyPrompt uses fewer tokens, but its answers are clearly worse.**
+For Thai with Opus 5.5 and the 4B translator, sending Thai directly is the better choice today.
+
+| set (items) | output tokens, B vs A | cost, B vs A | A correct | B correct |
+|---|---:|---:|---:|---:|
+| MGSM math (250) | −11% | −12% | 97.2% | 79.6% |
+| Belebele reading (200) | −12% | −19% | 93.5% | 84.0% |
+| WangchanThaiInstruct open (100) | −40% | −29% | judge: A wins 99 | B wins 0, 1 tie |
+| all (550) | −32% | −23% ($15.86 → $12.19) | | |
+
+- **Tokens.** B saves 11–40% of output tokens (95% CIs in the report), most on long
+  open-ended answers. Counting Claude Code's cached system prompt, the full total
+  saving is 6–16%. Cost here is the `total_cost_usd` Claude Code reports, which
+  weights cache reads and output as billed.
+- **Accuracy drops.** Both drops are significant (McNemar p < 0.0001). B's English
+  answer scores the same as its Thai answer, so the errors come from translating
+  the question to English, not the answer back. For example, "โหล" (dozen) became
+  "gallons", and "ที่เหลือ" (the rest) was dropped.
+- **Open answers read badly.** The judge preferred A in 99 of 100 pairs. Many of its
+  reasons point to the back-translation: "เล็บ" (nail) became "ตะปู" (a metal
+  nail), and "clubbing" became "การเข้าร่วมชมรม" (joining a club).
+- **Time.** The median per item is 7.2 s for A and 13.3 s for B. A game was using
+  the GPU during the run, so B's time is pessimistic.
+- 22 of 550 B items fell back (sent as typed, or answer shown in English). They are
+  kept and counted, as they are part of the real behaviour.
+- Limits: the judge is Claude itself; only Thai and one Claude model were tested;
+  `open` is only 100 items. The report's "translation share" column is wrong
+  (over 100%) and will be fixed.
