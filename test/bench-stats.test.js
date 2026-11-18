@@ -45,6 +45,31 @@ test('#57 bootstrap CI: 10,000 seeded resamples, percentile [s[250], s[9749]]', 
   assert.equal(bootstrapCI([]), null);
 });
 
+test('#57 bootstrap CI pins the seed and the exact indices s[250], s[9749]', () => {
+  // 40 pairs with distinct ratios, so neighbouring sorted resample values never tie.
+  const pairs = Array.from({ length: 40 }, (_, i) => ({ a: 1000 + ((i * 7919) % 3001), b: 500 + ((i * 6007) % 2503) }));
+  const sorted = (seed) => {
+    const rng = mulberry32(seed);
+    const s = [];
+    for (let r = 0; r < 10000; r++) {
+      s.push(pairedPct(Array.from({ length: pairs.length }, () => pairs[Math.floor(rng() * pairs.length)])));
+    }
+    return s.sort((x, y) => x - y);
+  };
+  const s = sorted(20261118);
+  for (const i of [250, 9749]) {
+    assert.notEqual(s[i - 1], s[i], `s[${i - 1}] ≠ s[${i}]`);
+    assert.notEqual(s[i], s[i + 1], `s[${i}] ≠ s[${i + 1}]`);
+  }
+  const ci = bootstrapCI(pairs);
+  assert.deepEqual(ci, [s[250], s[9749]]);
+  close(ci[0], -34.40722020275649, 1e-9);
+  close(ci[1], -10.625404007756948, 1e-9);
+  // Another seed gives another interval, so the seed is what fixes it.
+  const t = sorted(20261119);
+  assert.notDeepEqual(ci, [t[250], t[9749]]);
+});
+
 test('#57 Wilson 95% interval with z = 1.959964', () => {
   const [lo, hi] = wilson(8, 10);
   close(lo, 0.490162);
