@@ -240,6 +240,8 @@ test('allow_chat is stored on the chat; it auto-allows the same tool or Bash pre
   const id = await api.start({ text: 'go', folder });
   const answerNext = async (requestId, decision) => {
     const chat = await api.until(id, (c) => c.live?.card?.requestId === requestId, requestId);
+    // #52: only the command with an operator is flagged as allow-once.
+    assert.equal(chat.live.card.onceOnly, requestId === 'b3', requestId);
     assert.equal((await api.answer(id, requestId, { token: chat.live.card.token, decision })).status, 200);
   };
   await answerNext('b1', 'allow_chat');

@@ -207,7 +207,8 @@ export async function runTurn(deps, chat, message) {
         // detail: never translated, so they never wait on the translator.
         onPermission: (req) => {
           if (isAutoAllowed(chat.permissions, req.toolName, req.input)) return 'allow';
-          return turn.ask(req, cardText(req.toolName, req.input));
+          // onceOnly: "อนุญาตตลอดในแชตนี้" would store no rule (a Bash command with shell operators).
+          return turn.ask(req, { ...cardText(req.toolName, req.input), onceOnly: ruleFor(req.toolName, req.input) === null });
         },
       });
     } finally {
