@@ -366,10 +366,38 @@ test('#57 npm run bench:tokens with a model outside MODEL_FLAGS exits non-zero b
   const script = path.join(path.dirname(FAKE), '..', '..', 'scripts', 'bench-tokens.js');
   for (const args of [['--model', 'default'], ['--judge-model', 'claude-3-opus']]) {
     const out = await new Promise((resolve) => {
-      execFile(process.execPath, [script, ...args], (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }));
+      // No PATH and a short timeout: if the model check ever broke, the real `claude`
+      // could not be found and nothing long-running would start.
+      execFile(process.execPath, [script, ...args], { env: { ...process.env, PATH: '', Path: '' }, timeout: 30_000 }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }));
     });
     assert.equal(out.code, 1, args.join(' '));
     for (const id of MODEL_FLAGS) assert.match(out.stderr, new RegExp(id));
     assert.equal(out.stdout, '');
   }
+});
+
+// Seven items, so the seeded draws (0.028 0.239 0.203 0.179 0.407 0.829 0.719)
+// put items 5 and 6 B first: a fixed A-then-B order fails these tests.
+const wideRows = { mgsm: Array.from({ length: 7 }, (_, i) => ({ question: `โจทย์ข้อที่ ${i} มีกี่ชิ้น`, answer_number: 1 })) };
+const wideSample = { seed: 20261118, sets: { mgsm: ['0', '1', '2', '3', '4', '5', '6'] }, skipped: { open: [] } };
+const SEEDED = ['0A', '0B', '1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B', '5B', '5A', '6B', '6A'];
+
+test('#57 abOrder draws one seeded value per item: items 5 and 6 of seven run B first', () => {
+  assert.deepEqual([...abOrder(wideSample.sets.mgsm).entries()].flatMap(([id, o]) => o.map((c) => `${id}${c}`)), SEEDED);
+});
+
+test('#57 a run, a --limit run and a --retry-failed run all keep the seeded A/B order, including B-first items', async (t) => {
+  const env = await setup(t, [{ includes: 'ข้อที่ 5', text: 'boom', error: true }]);
+  const run = (opts) => env.run({ sample: wideSample, rows: wideRows, sets: ['mgsm'], ...opts });
+  const order = async () => (await env.lines('mgsm.jsonl')).map((l) => `${l.id}${l.condition}`);
+
+  assert.equal((await run({ limit: 6 })).code, 0);
+  assert.deepEqual(await order(), SEEDED.slice(0, 12), '--limit 6 keeps the full-list order (5 runs B first)');
+  assert.equal((await run()).code, 0);
+  assert.deepEqual(await order(), SEEDED, 'the rest of the run appends 6B then 6A');
+  assert.deepEqual((await env.calls()).map((c) => c.prompt.match(/ข้อที่ (\d)/)[1]).join(''), '00112233445566');
+
+  await env.setRules([]);
+  assert.equal((await run({ retryFailed: true })).code, 0);
+  assert.deepEqual(await order(), [...SEEDED, '5B', '5A'], 'both retried pairs of item 5 keep the B-first order');
 });
