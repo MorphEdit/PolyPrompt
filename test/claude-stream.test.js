@@ -54,7 +54,7 @@ test('args without a folder: web tools only, general-assistant prompt, stream-js
   const argv = buildArgs('s1', 'claude-haiku-5-5');
   assert.equal(argv[argv.indexOf('--input-format') + 1], 'stream-json');
   assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json');
-  assert.equal(argv[argv.indexOf('--permission-prompts') + 1], 'host');
+  assert.equal(argv[argv.indexOf('--permission-prompt-tool') + 1], 'stdio');
   assert.equal(argv[argv.indexOf('--tools') + 1], 'WebSearch,WebFetch');
   assert.equal(argv[argv.indexOf('--allowedTools') + 1], 'WebSearch,WebFetch');
   assert.ok(argv.includes('--strict-mcp-config'));
@@ -70,7 +70,7 @@ test('args with a folder: default Claude Code prompt and settings, read-only and
   const argv = buildArgs('s1', 'default', path.resolve('/some/folder'));
   assert.equal(argv[argv.indexOf('--input-format') + 1], 'stream-json');
   assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json');
-  assert.equal(argv[argv.indexOf('--permission-prompts') + 1], 'host');
+  assert.equal(argv[argv.indexOf('--permission-prompt-tool') + 1], 'stdio');
   assert.equal(argv[argv.indexOf('--allowedTools') + 1], FOLDER_ALLOWED_TOOLS);
   assert.deepEqual(FOLDER_ALLOWED_TOOLS.split(','), ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebSearch', 'WebFetch']);
   for (const flag of ['--tools', '--strict-mcp-config', '--setting-sources', '--system-prompt', '--model']) {

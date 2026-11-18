@@ -97,7 +97,7 @@ test('a folder sent with the first message is stored on the chat and used as the
   assert.equal(path.resolve(log.cwd), path.resolve(folder));
   assert.equal(log.argv[log.argv.indexOf('--allowedTools') + 1], FOLDER_ALLOWED_TOOLS);
   for (const flag of ['--tools', '--strict-mcp-config', '--setting-sources', '--system-prompt']) assert.ok(!log.argv.includes(flag), flag);
-  assert.equal(log.argv[log.argv.indexOf('--permission-prompts') + 1], 'host');
+  assert.equal(log.argv[log.argv.indexOf('--permission-prompt-tool') + 1], 'stdio');
 
   // The follow-up resumes in the same folder; folder with chatId is refused.
   await api.script([result('again', 's-folder')]);
