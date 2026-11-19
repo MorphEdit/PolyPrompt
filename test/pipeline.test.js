@@ -7,7 +7,7 @@ import path from 'node:path';
 import { ClaudeError } from '../src/claude.js';
 import { createModelManager } from '../src/model.js';
 import {
-  ANSWER_NOT_TRANSLATED_NOTE, NOT_TRANSLATED_NOTE, TRANSLATE_FAILED, UNSUPPORTED_NOTE, createPending,
+  ANSWER_NOT_TRANSLATED_NOTE, LOCAL_TRANSLATE, NOT_TRANSLATED_NOTE, TRANSLATE_FAILED, UNSUPPORTED_NOTE, createPending, runTurn,
 } from '../src/pipeline.js';
 import { NotTranslatedError } from '../src/translator.js';
 import { createApp } from '../src/server.js';
@@ -60,6 +60,23 @@ function fakeTranslator() {
   return t;
 }
 
+// Fake back-translator (Claude Haiku, #71): tags text with its target; `gate`
+// (if set) blocks each call, `fail` makes it throw.
+function fakeBackTranslator() {
+  const b = {
+    calls: [],
+    gate: null,
+    fail: false,
+    translate: async ({ text, targetLang, signal }) => {
+      b.calls.push({ text, targetLang, signal });
+      if (b.gate) await b.gate();
+      if (b.fail) throw new Error('haiku broke');
+      return `<${targetLang}>${text}`;
+    },
+  };
+  return b;
+}
+
 // Fake runner: answers with `reply` and returns the next session id.
 function fakeRunner() {
   const r = {
@@ -92,8 +109,10 @@ async function setup(t, { ready = true, table } = {}) {
   }
   const detector = fakeDetect(table);
   const runner = fakeRunner();
+  const back = fakeBackTranslator();
   const pending = createPending();
-  const server = createApp({ modelManager, chatStore, publicDir: dir, detect: detector.detect, runner, pending });
+  const deps = { modelManager, chatStore, publicDir: dir, detect: detector.detect, runner, pending, backTranslate: back.translate };
+  const server = createApp(deps);
   const { port } = await listen(server);
   t.after(() => new Promise((r) => { server.close(r); server.closeAllConnections(); }));
   const api = {
@@ -115,43 +134,55 @@ async function setup(t, { ready = true, table } = {}) {
       return { ...r.json, chat: await api.idle(r.json.chatId) };
     },
   };
-  return { api, dir, chatStore, modelManager, loader, translator, detector, runner, pending };
+  // A turn of the benchmark's local translator pipeline (LOCAL_TRANSLATE).
+  async function localTurn(text) {
+    const chat = await chatStore.create(text);
+    const message = { id: 'm1', role: 'user', original: text, english: null, lang: null, createdAt: 'x' };
+    chat.messages.push(message);
+    pending.set(chat.id, 'translating');
+    await runTurn(deps, chat, message, LOCAL_TRANSLATE);
+    return chatStore.get(chat.id);
+  }
+  return { api, dir, chatStore, modelManager, loader, translator, back, detector, runner, pending, localTurn };
 }
 
 const THAI = { 'สวัสดี': { kind: 'ok', lang: 'th' }, 'ok': { kind: 'unsure', lang: null },
   'Bonjour tout le monde': { kind: 'ok', lang: 'fr' }, 'Sawubona': { kind: 'unsupported', lang: null } };
 
-test('Thai message is translated to English, sent to Claude, and translated back', async (t) => {
-  const { api, translator, runner } = await setup(t, { table: THAI });
+test('Thai message is sent as typed, Claude answers in English, Haiku translates it back (#71)', async (t) => {
+  const { api, translator, back, runner } = await setup(t, { table: THAI });
   const { chatId, messageId, chat } = await api.turn({ text: 'สวัสดี' });
-  assert.deepEqual(translator.calls[0], ['สวัสดี', 'th', 'en']);
+  assert.equal(translator.calls.length, 0, 'no local translator call');
   assert.equal(runner.calls.length, 1);
-  assert.equal(runner.calls[0].prompt, '<en>สวัสดี');
+  assert.equal(runner.calls[0].prompt, 'สวัสดี');
+  assert.equal(runner.calls[0].replyInEnglish, true);
   assert.equal(runner.calls[0].sessionId, null);
-  assert.deepEqual(translator.calls[1], ['Answer to: <en>สวัสดี', 'en', 'th']);
+  assert.deepEqual(back.calls.map((c) => [c.text, c.targetLang]), [['Answer to: สวัสดี', 'th']]);
   assert.equal(chat.id, chatId);
   assert.equal(chat.lang, 'th');
   assert.equal(chat.sessionId, 's1');
   assert.equal(chat.messages.length, 2);
   const [u, a] = chat.messages;
   assert.equal(u.id, messageId);
-  assert.deepEqual([u.role, u.original, u.english, u.lang], ['user', 'สวัสดี', '<en>สวัสดี', 'th']);
+  assert.deepEqual([u.role, u.original, u.english, u.lang], ['user', 'สวัสดี', null, 'th']);
   assert.equal(u.error, undefined);
   assert.equal(a.role, 'assistant');
-  assert.equal(a.english, 'Answer to: <en>สวัสดี');
-  assert.equal(a.original, '<th>Answer to: <en>สวัสดี');
+  assert.equal(a.english, 'Answer to: สวัสดี');
+  assert.equal(a.original, '<th>Answer to: สวัสดี');
   assert.equal(a.lang, 'th');
   assert.equal(a.note, undefined);
 });
 
-test('English message: translator never called, answer shown untranslated', async (t) => {
-  const { api, translator, runner } = await setup(t);
+test('English message: no translator of any kind is called, answer shown as is', async (t) => {
+  const { api, translator, back, runner } = await setup(t);
   const { chat } = await api.turn({ text: 'Hello there' });
   assert.equal(translator.calls.length, 0);
+  assert.equal(back.calls.length, 0);
   assert.equal(runner.calls[0].prompt, 'Hello there');
   const [u, a] = chat.messages;
-  assert.deepEqual([u.english, u.lang], ['Hello there', 'en']);
+  assert.deepEqual([u.english, u.lang], [null, 'en']);
   assert.deepEqual([a.original, a.english, a.lang], ['Answer to: Hello there', 'Answer to: Hello there', 'en']);
+  assert.equal(a.note, undefined);
   assert.equal(chat.lang, 'en');
 });
 
@@ -193,15 +224,18 @@ test('empty or whitespace text is 400 and nothing is called', async (t) => {
   assert.deepEqual((await createChatStore({ dir }).list()), []);
 });
 
-test('model not ready: send and retry are 503', async (t) => {
-  const { api, chatStore, detector, runner } = await setup(t, { ready: false });
-  assert.equal((await api.send({ text: 'Hello' })).status, 503);
+test('model not ready: translate-mode send and retry still run (#71)', async (t) => {
+  const { api, chatStore, runner, loader } = await setup(t, { ready: false });
+  const sent = await api.turn({ text: 'Hello' });
+  assert.equal(sent.chat.messages[1].original, 'Answer to: Hello');
   const chat = await chatStore.create('x');
   chat.messages.push({ id: 'm1', role: 'user', original: 'x', english: 'x', lang: 'en',
     error: { kind: 'failed', message: 'x' }, createdAt: new Date().toISOString() });
   await chatStore.save(chat);
-  assert.equal((await api.retry(chat.id, 'm1')).status, 503);
-  assert.equal(detector.calls.length + runner.calls.length, 0);
+  assert.equal((await api.retry(chat.id, 'm1')).status, 202);
+  assert.equal((await api.idle(chat.id)).messages.length, 2);
+  assert.equal(runner.calls.length, 2);
+  assert.equal(loader.calls.length, 1, 'no second load started');
 });
 
 test('unknown chat is 404 for send and retry; unknown message is 404', async (t) => {
@@ -213,11 +247,11 @@ test('unknown chat is 404 for send and retry; unknown message is 404', async (t)
   assert.equal((await api.retry(chatId, 'nope')).status, 404);
 });
 
-test('pendingStep goes translating -> thinking -> translating_back, with 409s while pending', async (t) => {
-  const { api, dir, translator, runner } = await setup(t, { table: THAI });
+test('pendingStep goes thinking -> translating_back, with 409s while pending', async (t) => {
+  const { api, dir, back, runner } = await setup(t, { table: THAI });
   const gates = [];
   const gate = () => { const d = deferred(); gates.push(d); return d.promise; };
-  translator.gate = gate;
+  back.gate = gate;
   runner.gate = gate;
   const r = await api.send({ text: 'สวัสดี' });
   assert.equal(r.status, 202);
@@ -225,7 +259,7 @@ test('pendingStep goes translating -> thinking -> translating_back, with 409s wh
   const waitGate = async (n) => { while (gates.length < n) await tick(); };
 
   await waitGate(1);
-  assert.equal((await api.get(chatId)).json.pendingStep, 'translating');
+  assert.equal((await api.get(chatId)).json.pendingStep, 'thinking');
   assert.equal((await api.send({ chatId, text: 'more' })).status, 409);
   const file = path.join(dir, chatId + '.json');
   const before = await readFile(file, 'utf8');
@@ -234,15 +268,10 @@ test('pendingStep goes translating -> thinking -> translating_back, with 409s wh
   gates[0].resolve();
 
   await waitGate(2);
-  assert.equal((await api.get(chatId)).json.pendingStep, 'thinking');
+  assert.equal((await api.get(chatId)).json.pendingStep, 'translating_back');
   assert.equal((await api.send({ chatId, text: 'more' })).status, 409);
   assert.equal((await api.del(chatId)).status, 409);
   gates[1].resolve();
-
-  await waitGate(3);
-  assert.equal((await api.get(chatId)).json.pendingStep, 'translating_back');
-  assert.equal((await api.del(chatId)).status, 409);
-  gates[2].resolve();
 
   const chat = await api.idle(chatId);
   assert.equal(chat.pendingStep, null);
@@ -266,10 +295,10 @@ for (const kind of ['cli_missing', 'not_logged_in', 'timeout', 'failed']) {
   });
 }
 
-test('translation failure sets a failed error', async (t) => {
-  const { api, translator, runner } = await setup(t, { table: THAI });
+test('a failing local translation (benchmark pipeline) sets a failed error', async (t) => {
+  const { translator, runner, localTurn } = await setup(t, { table: THAI });
   translator.fail = true;
-  const { chat } = await api.turn({ text: 'สวัสดี' });
+  const chat = await localTurn('สวัสดี');
   assert.equal(chat.messages.length, 1);
   assert.deepEqual(chat.messages[0].error, { kind: 'failed', message: TRANSLATE_FAILED });
   assert.equal(runner.calls.length, 0);
@@ -277,12 +306,12 @@ test('translation failure sets a failed error', async (t) => {
 });
 
 test('a GET racing the end of a turn never shows a stale chat as finished', async (t) => {
-  const { api, chatStore, translator, pending } = await setup(t, { table: THAI });
+  const { api, chatStore, runner, pending } = await setup(t, { table: THAI });
   const d = deferred();
-  translator.gate = () => d.promise;
-  translator.fail = true;
+  runner.gate = () => d.promise;
+  runner.error = new ClaudeError('failed');
   const { chatId } = (await api.send({ text: 'สวัสดี' })).json;
-  while (pending.get(chatId) !== 'translating') await tick();
+  while (pending.get(chatId) !== 'thinking') await tick();
   // The GET reads the file while the turn is still running, then the turn ends.
   const get = chatStore.get;
   const read = deferred();
@@ -302,7 +331,7 @@ test('a GET racing the end of a turn never shows a stale chat as finished', asyn
   const { json } = await response;
   if (json.pendingStep === null) assert.ok(json.messages[0].error, 'finished chat must carry its error');
   else assert.equal(json.messages[0].error, undefined);
-  assert.deepEqual((await api.idle(chatId)).messages[0].error, { kind: 'failed', message: TRANSLATE_FAILED });
+  assert.deepEqual((await api.idle(chatId)).messages[0].error, { kind: 'failed', message: new ClaudeError('failed').message });
 });
 
 test('a failed final save leaves no answer, the old session and a retryable error', async (t) => {
@@ -338,11 +367,11 @@ test('a throwing detector fails the turn without crashing the server', async (t)
 });
 
 test('retry re-runs the same message; on success the error is gone and the answer follows', async (t) => {
-  const { api, runner, detector, translator } = await setup(t, { table: THAI });
+  const { api, runner, detector, back } = await setup(t, { table: THAI });
   runner.error = new ClaudeError('timeout');
   const { chatId, messageId } = await api.turn({ text: 'สวัสดี' });
   runner.error = null;
-  translator.calls.length = 0;
+  assert.equal(back.calls.length, 0);
   const r = await api.retry(chatId, messageId);
   assert.equal(r.status, 202);
   const chat = await api.idle(chatId);
@@ -350,9 +379,11 @@ test('retry re-runs the same message; on success the error is gone and the answe
   assert.equal(chat.messages[0].id, messageId);
   assert.equal(chat.messages[0].error, undefined);
   assert.equal(chat.messages[1].role, 'assistant');
-  assert.equal(chat.messages[1].original, '<th>Answer to: <en>สวัสดี');
-  assert.equal(detector.calls.length, 2);
-  assert.deepEqual(translator.calls[0], ['สวัสดี', 'th', 'en']);
+  assert.equal(chat.messages[1].original, '<th>Answer to: สวัสดี');
+  // The message twice, then the answer (is it already Thai?).
+  assert.deepEqual(detector.calls, ['สวัสดี', 'สวัสดี', 'Answer to: สวัสดี']);
+  assert.equal(runner.calls[1].prompt, 'สวัสดี');
+  assert.deepEqual(back.calls.map((c) => c.targetLang), ['th']);
   assert.equal(runner.calls.length, 2);
   assert.equal(chat.sessionId, 's2');
 });
@@ -404,56 +435,66 @@ test('retrying a turn marked by markInterrupted succeeds', async (t) => {
 });
 
 test('unsure detection uses the chat lang, or English when none, and keeps the chat lang', async (t) => {
-  const { api, translator, runner } = await setup(t, { table: THAI });
+  const { api, back, runner } = await setup(t, { table: THAI });
   // New chat, unsure: English, no translation, chat lang stays null.
   const fresh = await api.turn({ text: 'ok' });
-  assert.equal(translator.calls.length, 0);
+  assert.equal(back.calls.length, 0);
   assert.equal(fresh.chat.messages[0].lang, 'en');
   assert.equal(fresh.chat.lang, null);
 
   const { chatId } = await api.turn({ text: 'สวัสดี' });
-  translator.calls.length = 0;
+  back.calls.length = 0;
   const { chat } = await api.turn({ chatId, text: 'ok' });
-  assert.deepEqual(translator.calls[0], ['ok', 'th', 'en']);
-  assert.equal(translator.calls[1][2], 'th');
+  assert.equal(runner.calls.at(-1).prompt, 'ok');
+  assert.deepEqual(back.calls.map((c) => c.targetLang), ['th']);
   assert.equal(chat.messages[2].lang, 'th');
   assert.equal(chat.messages[3].lang, 'th');
   assert.equal(chat.lang, 'th');
 
   // Switching to another confident language answers in it and updates the chat.
-  translator.calls.length = 0;
+  back.calls.length = 0;
   const switched = await api.turn({ chatId, text: 'Bonjour tout le monde' });
-  assert.deepEqual(translator.calls[0], ['Bonjour tout le monde', 'fr', 'en']);
-  assert.equal(translator.calls[1][2], 'fr');
+  assert.deepEqual(back.calls.map((c) => c.targetLang), ['fr']);
   assert.equal(switched.chat.messages[5].lang, 'fr');
   assert.equal(switched.chat.lang, 'fr');
-  assert.equal(runner.calls.at(-1).prompt, '<en>Bonjour tout le monde');
+  assert.equal(runner.calls.at(-1).prompt, 'Bonjour tout le monde');
 });
 
-test('unsupported language: sent as typed, English answer with a Thai note, chat lang unchanged', async (t) => {
-  const { api, translator, runner } = await setup(t, { table: THAI });
+test('a language the detector cannot name: sent as typed, English answer with no note, chat lang unchanged', async (t) => {
+  const { api, back, runner } = await setup(t, { table: THAI });
   const { chatId } = await api.turn({ text: 'สวัสดี' });
-  translator.calls.length = 0;
+  back.calls.length = 0;
   const { chat } = await api.turn({ chatId, text: 'Sawubona' });
-  assert.equal(translator.calls.length, 0);
+  assert.equal(back.calls.length, 0);
   assert.equal(runner.calls.at(-1).prompt, 'Sawubona');
   const [u, a] = chat.messages.slice(2);
-  assert.deepEqual([u.lang, u.english, u.original], [null, 'Sawubona', 'Sawubona']);
+  assert.deepEqual([u.lang, u.english, u.original], ['en', null, 'Sawubona']);
   assert.equal(a.lang, 'en');
   assert.equal(a.english, 'Answer to: Sawubona');
   assert.equal(a.original, a.english);
-  assert.equal(a.note, UNSUPPORTED_NOTE);
+  assert.equal(a.note, undefined);
   assert.equal(chat.lang, 'th');
 });
 
-test('a rejected forward translation sends the text as typed with a note (#36)', async (t) => {
-  const { api, translator, runner } = await setup(t, { table: THAI });
+test('benchmark pipeline: an unsupported language is sent as typed with UNSUPPORTED_NOTE', async (t) => {
+  const { translator, runner, localTurn } = await setup(t, { table: THAI });
+  const chat = await localTurn('Sawubona');
+  assert.equal(translator.calls.length, 0);
+  assert.equal(runner.calls[0].prompt, 'Sawubona');
+  assert.equal(runner.calls[0].replyInEnglish, false);
+  const [u, a] = chat.messages;
+  assert.deepEqual([u.lang, u.english], [null, 'Sawubona']);
+  assert.equal(a.note, UNSUPPORTED_NOTE);
+});
+
+test('benchmark pipeline: a rejected forward translation sends the text as typed with a note (#36)', async (t) => {
+  const { translator, runner, localTurn } = await setup(t, { table: THAI });
   const answer = translator.translate.bind(translator);
   translator.translate = async (text, src, tgt) => {
     if (tgt === 'en') { translator.calls.push([text, src, tgt]); throw new NotTranslatedError(); }
     return answer(text, src, tgt);
   };
-  const { chat } = await api.turn({ text: 'สวัสดี' });
+  const chat = await localTurn('สวัสดี');
   assert.equal(runner.calls[0].prompt, 'สวัสดี');
   const [u, a] = chat.messages;
   assert.equal(u.error, undefined);
@@ -463,14 +504,14 @@ test('a rejected forward translation sends the text as typed with a note (#36)',
   assert.equal(chat.lang, 'th');
 });
 
-test('a rejected back translation shows the English answer with a note (#36)', async (t) => {
-  const { api, translator } = await setup(t, { table: THAI });
+test('benchmark pipeline: a rejected back translation shows the English answer with a note (#36)', async (t) => {
+  const { translator, localTurn } = await setup(t, { table: THAI });
   const answer = translator.translate.bind(translator);
   translator.translate = async (text, src, tgt) => {
     if (tgt === 'th') { translator.calls.push([text, src, tgt]); throw new NotTranslatedError(); }
     return answer(text, src, tgt);
   };
-  const { chat } = await api.turn({ text: 'สวัสดี' });
+  const chat = await localTurn('สวัสดี');
   const [u, a] = chat.messages;
   assert.equal(u.error, undefined);
   assert.equal(a.original, 'Answer to: <en>สวัสดี');

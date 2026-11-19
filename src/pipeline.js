@@ -1,6 +1,9 @@
-// Send/retry pipeline: detect -> translate -> Claude -> translate back -> save.
+// Send/retry pipeline: detect -> Claude (in English, translate mode) ->
+// translate back with Claude Haiku -> save. The benchmark's LOCAL_TRANSLATE
+// mode still translates both ways with the local translator.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { cardText, isAutoAllowed, ruleFor, sameRule } from './activity.js';
+import { REPLY_LANGUAGES } from './lang.js';
 import { newId } from './store.js';
 import { translateText } from './text.js';
 import { NotTranslatedError } from './translator.js';
@@ -13,8 +16,11 @@ export const TURN_FAILED = 'เกิดข้อผิดพลาด กรุ
 export const NOT_TRANSLATED_NOTE = 'แปลข้อความไม่สำเร็จ จึงส่งข้อความตามที่พิมพ์ให้ Claude';
 export const ANSWER_NOT_TRANSLATED_NOTE = 'แปลคำตอบไม่สำเร็จ จึงแสดงคำตอบเป็นภาษาอังกฤษ';
 export const DECISIONS = ['allow', 'allow_chat', 'deny'];
+// The old translate pipeline (local translator both ways). Never a setting:
+// only the benchmark (npm run bench:tokens) runs it, as its condition B.
+export const LOCAL_TRANSLATE = 'local_translate';
 
-// In-memory registry chatId -> 'translating' | 'thinking' | 'translating_back',
+// In-memory registry chatId -> 'translating' (LOCAL_TRANSLATE) | 'thinking' | 'translating_back',
 // plus the running turn (live activity, permission cards, stop) of each chat.
 // Nothing here survives a restart: markInterrupted covers that.
 export function createPending() {
@@ -111,14 +117,36 @@ export function createTurn({ autoAllowed = () => false, allowChat = async () => 
 
 class TranslateError extends Error {}
 
-// Resolves to the translation, or to null when the model kept returning
-// something other than a translation (the caller then falls back).
+// Local translator: resolves to the translation, or to null when the model
+// kept returning something other than a translation (the caller then falls back).
 async function translate(translator, text, src, tgt, maxChars) {
   try {
     return await translateText(translator, text, src, tgt, { maxChars });
   } catch (err) {
     if (err instanceof NotTranslatedError) return null;
     throw new TranslateError(err?.message ?? String(err));
+  }
+}
+
+// Whether text is mostly (eld's dominant language) in lang.
+function inLanguage(detect, text, lang, options) {
+  try {
+    const found = detect(text, options);
+    return found?.kind === 'ok' && found.lang === lang;
+  } catch {
+    return false;
+  }
+}
+
+// Resolves to the translation, or to null when it failed (error, timeout,
+// empty output or stopped): a failed back-translation never fails the turn.
+async function translateBack(backTranslate, text, targetLang, signal) {
+  try {
+    const out = await backTranslate({ text, targetLang, signal });
+    return typeof out === 'string' && out.trim() ? out : null;
+  } catch (err) {
+    console.error('could not translate the answer back:', err?.message ?? err);
+    return null;
   }
 }
 
@@ -138,13 +166,21 @@ export function sendModeOf(deps) {
 
 // Runs steps 3-7 for the chat's last (user) message. The caller has already
 // set the chat's pending entry; it is always cleared here. Never rejects.
-// mode: 'direct' (sent as typed, nothing translated) or 'translate'; the
-// routes pass the mode they read, so a later switch never changes this turn.
-// deps: { chatStore, modelManager, detect, runner, pending, settings?, maxChars? }
+// mode: 'direct' (sent as typed, nothing translated) or 'translate' (sent
+// as typed, Claude answers in English, backTranslate turns the answer into
+// the message's language); the routes pass the mode they read, so a later
+// switch never changes this turn. LOCAL_TRANSLATE: see above.
+// deps: { chatStore, detect, runner, pending, settings?, backTranslate?,
+// modelManager? and maxChars? (LOCAL_TRANSLATE only) }
+// backTranslate({ text, targetLang, signal }) -> translation; defaults to
+// runner.translate (translateWithClaude). Only LOCAL_TRANSLATE uses the
+// local translator.
 export async function runTurn(deps, chat, message, mode = sendModeOf(deps)) {
   const { chatStore, modelManager, detect, runner, pending, settings, maxChars = MAX_CHARS } = deps;
+  const backTranslate = deps.backTranslate ?? ((opts) => runner.translate(opts));
   const id = chat.id;
   const direct = mode === 'direct';
+  const local = mode === LOCAL_TRANSLATE;
   // Restored on failure so a failed final save leaves no answer and the old
   // session, unless the stream already gave a new one: that session holds
   // what Claude did, so a retry resumes it.
@@ -170,31 +206,34 @@ export async function runTurn(deps, chat, message, mode = sendModeOf(deps)) {
   });
   pending.begin(id, turn);
   try {
-    pending.set(id, direct ? 'thinking' : 'translating');
+    pending.set(id, local ? 'translating' : 'thinking');
     // Every call goes through the manager's queue, so a size switch during
     // this turn is picked up by the calls that run after it.
     const translator = { translate: (text, src, tgt) => modelManager.translate(text, src, tgt) };
     // Direct: no detection, Claude reads and answers the text as typed.
-    const detected = direct ? { kind: 'direct' } : detect(message.original);
+    // Translate: every eld language has a code Claude can translate back to.
+    const detectOptions = local ? undefined : { languages: REPLY_LANGUAGES };
+    const detected = direct ? { kind: 'direct' } : detect(message.original, detectOptions);
     const supported = detected.kind !== 'unsupported';
     let lang = null;
     if (detected.kind === 'ok') lang = detected.lang;
-    else if (!direct && detected.kind !== 'unsupported') lang = chat.lang ?? ENGLISH;
+    else if (!supported) lang = local ? null : ENGLISH;
+    else if (!direct) lang = chat.lang ?? ENGLISH;
     const foreign = !direct && supported && lang !== ENGLISH;
 
     const notes = [];
+    // Only LOCAL_TRANSLATE sends an English translation; direct and translate
+    // send the text as typed and store no English text for it.
     let english = message.original;
-    if (foreign) {
-      // Not translatable: Claude gets the text as typed (it reads every language).
+    if (local && foreign) {
       english = await translate(translator, message.original, lang, ENGLISH, maxChars);
       if (english === null) {
         english = message.original;
         notes.push(NOT_TRANSLATED_NOTE);
       }
     }
-
     message.lang = lang;
-    message.english = direct ? null : english;
+    message.english = local ? english : null;
     if (direct) message.mode = 'direct';
 
     pending.set(id, 'thinking');
@@ -204,6 +243,7 @@ export async function runTurn(deps, chat, message, mode = sendModeOf(deps)) {
     try {
       answer = await runner.run({
         prompt: english,
+        replyInEnglish: mode === 'translate',
         sessionId: chat.sessionId ?? null,
         model,
         folder: chat.folder ?? null,
@@ -226,14 +266,26 @@ export async function runTurn(deps, chat, message, mode = sendModeOf(deps)) {
       turn.running = false;
     }
 
-    // Back to this message's language; English and unsupported are shown as is.
+    // Back to this message's language. English, empty and answers already
+    // in that language are shown as is. A partial (stopped) answer is never
+    // sent to the translator; a failed translation keeps the English answer.
     let shown = answer.text;
-    if (foreign && answer.text) {
+    if (local && foreign && answer.text) {
       pending.set(id, 'translating_back');
       shown = await translate(translator, answer.text, ENGLISH, lang, maxChars);
       if (shown === null) {
         shown = answer.text;
         notes.push(ANSWER_NOT_TRANSLATED_NOTE);
+      }
+    } else if (!local && foreign && answer.text && !inLanguage(detect, answer.text, lang, detectOptions)) {
+      if (answer.stopped) notes.push(ANSWER_NOT_TRANSLATED_NOTE);
+      else {
+        pending.set(id, 'translating_back');
+        shown = await translateBack(backTranslate, answer.text, lang, turn.signal);
+        if (shown === null) {
+          shown = answer.text;
+          notes.push(ANSWER_NOT_TRANSLATED_NOTE);
+        }
       }
     }
 
@@ -255,7 +307,7 @@ export async function runTurn(deps, chat, message, mode = sendModeOf(deps)) {
       reply.model = answer.model;
       reply.requestedModel = model;
     }
-    if (!supported) notes.push(UNSUPPORTED_NOTE);
+    if (!supported && local) notes.push(UNSUPPORTED_NOTE);
     if (notes.length) reply.note = notes.join(' ');
     if (turn.activity.length) reply.activity = turn.activity.map((line) => ({ ...line }));
     if (answer.stopped) reply.stopped = true;

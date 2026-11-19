@@ -36,7 +36,7 @@ let sw = null;
 let settings = { translatorSize: '4b', claudeModel: 'default', downloadedSizes: ['4b'] };
 const puts = [];
 
-test('the "ส่งใหม่" button becomes enabled when the model turns ready', async () => {
+test('the "ส่งใหม่" button never waits for the translator (#71); the banner hides once it is ready', async () => {
   model = { state: 'loading', progress: 0.5, error: null, size: '4b' };
   const chat = {
     id: 'c1', title: 't', pendingStep: null,
@@ -65,12 +65,12 @@ test('the "ส่งใหม่" button becomes enabled when the model turns re
   find(byId['chat-list'], (e) => e.className === 'chat-title').listeners.click();
   await tick(50);
   const retry = () => find(byId.messages, (e) => e.tagName === 'button' && e.textContent === 'ส่งใหม่');
-  assert.equal(retry().disabled, true, 'disabled while the model is loading');
+  assert.equal(retry().disabled, false, 'enabled while the model is loading');
 
   model = { state: 'ready', progress: 1, error: null, size: '4b' };
   await tick(1300); // one status poll
   assert.equal(byId['model-banner'].hidden, true);
-  assert.equal(retry().disabled, false, 'enabled once the model is ready');
+  assert.equal(retry().disabled, false, 'still enabled once the model is ready');
 });
 
 const pickerButtons = () => {
@@ -82,7 +82,7 @@ const pickerButtons = () => {
 
 test('the model picker shows both choices, saves on change and follows the model state', async () => {
   // Continues from the app loaded above (model ready, chat c1 open, nothing pending).
-  assert.equal(byId.picker.textContent, 'แปล 4B · Claude ค่าเริ่มต้น');
+  assert.equal(byId.picker.textContent, 'แปลกลับ · Claude ค่าเริ่มต้น');
   assert.equal(byId.picker.disabled, false);
   byId.picker.listeners.click();
   assert.equal(byId['picker-menu'].hidden, false);
@@ -97,7 +97,7 @@ test('the model picker shows both choices, saves on change and follows the model
   cOpus.listeners.click();
   await tick(20);
   assert.deepEqual(puts.at(-1), { claudeModel: 'claude-opus-5-5' });
-  assert.equal(byId.picker.textContent, 'แปล 4B · Claude Opus 5.5');
+  assert.equal(byId.picker.textContent, 'แปลกลับ · Claude Opus 5.5');
 
   // A missing size asks first; cancelling sends nothing.
   let asked = null;

@@ -11,18 +11,17 @@ export function keyAction({ key, shiftKey = false, isComposing = false } = {}) {
   return shiftKey ? 'newline' : 'send';
 }
 
-// Direct mode needs no translator. A missing sendMode (an older server)
-// means translate mode, as before.
-const needsTranslator = (sendMode) => sendMode !== 'direct';
-
-export function canSend({ text, pending, modelState, lastMessageHasError, sendMode }) {
+// No send mode needs the local translator any more: translate mode has
+// Claude Haiku translate the answer back. Only the old-session viewer uses it.
+// modelState and sendMode are still accepted, and ignored.
+export function canSend({ text, pending, lastMessageHasError }) {
   if (typeof text !== 'string' || text.trim() === '') return false;
   if (pending) return false;
-  if (needsTranslator(sendMode) && modelState !== 'ready') return false;
   if (lastMessageHasError) return false;
   return true;
 }
 
+// 'translating' is only shown by an older server.
 const STEP_LABELS = {
   translating: 'กำลังแปลข้อความเป็นภาษาอังกฤษ…',
   thinking: 'Claude กำลังคิด…',
@@ -63,14 +62,14 @@ export function canRetry(messages, index) {
 }
 
 // Whether the "ส่งใหม่" button of a retryable message can be clicked now.
-export function retryEnabled({ pending, modelState, sendMode }) {
-  return !pending && (!needsTranslator(sendMode) || modelState === 'ready');
+export function retryEnabled({ pending }) {
+  return !pending;
 }
 
-// Whether the translator's loading/error banners show: in translate mode, or
-// while an open old Claude Code session waits for its translation.
-export function modelBannerShown({ sendMode, sessionWaiting = false }) {
-  return needsTranslator(sendMode) || !!sessionWaiting;
+// Whether the translator's loading/error banners show: only while an open
+// old Claude Code session waits for its translation (in either send mode).
+export function modelBannerShown({ sessionWaiting = false } = {}) {
+  return !!sessionWaiting;
 }
 
 export function lastMessageHasError(chat) {
@@ -196,11 +195,13 @@ export const SIZE_OPTIONS = [
 
 export const SEND_MODE_OPTIONS = [
   { value: 'direct', label: 'ส่งตรง (แนะนำ)', hint: 'ส่งข้อความตามที่พิมพ์ Claude ตอบเป็นภาษาเดียวกัน แม่นที่สุด' },
-  { value: 'translate', label: 'แปลเป็นอังกฤษก่อน', hint: 'ประหยัด token ราว 20–30% แต่คำตอบอาจผิดหรือภาษาแปลก' },
+  { value: 'translate', label: 'ตอบเป็นอังกฤษแล้วแปลกลับ', hint: 'ประหยัดราว 20% ช้าลงราว 10 วินาที ภาษาอาจดูเป็นงานแปล' },
 ];
 
-// Hint of the disabled size section in direct mode.
-export const SIZES_DIRECT_HINT = 'ใช้เมื่อเลือกแปลเป็นอังกฤษก่อน';
+// Hint of the size section: the local translator only translates old sessions.
+export const SIZES_HINT = 'ใช้แปลแชตเก่าจาก Claude Code';
+// Kept for older imports; the same hint.
+export const SIZES_DIRECT_HINT = SIZES_HINT;
 
 const optionOf = (options, value) => options.find((o) => o.value === value) ?? options[0];
 
@@ -216,9 +217,10 @@ export function formatGB(bytes) {
   return `${(Math.round(bytes / 1e8) / 10).toFixed(1)} GB`;
 }
 
-// Text of the picker button, e.g. "ส่งตรง · Claude ค่าเริ่มต้น" or "แปล 4B · Claude ค่าเริ่มต้น".
-export function pickerLabel({ translatorSize, claudeModel, sendMode } = {}) {
-  const send = needsTranslator(sendMode) ? `แปล ${optionOf(SIZE_OPTIONS, translatorSize).label}` : 'ส่งตรง';
+// Text of the picker button, e.g. "ส่งตรง · Claude ค่าเริ่มต้น" or "แปลกลับ · Claude ค่าเริ่มต้น".
+// A missing sendMode (an older server) means translate mode.
+export function pickerLabel({ claudeModel, sendMode } = {}) {
+  const send = sendMode === 'direct' ? 'ส่งตรง' : 'แปลกลับ';
   return `${send} · Claude ${optionOf(CLAUDE_OPTIONS, claudeModel).label}`;
 }
 
@@ -229,9 +231,8 @@ export function pickerDisabled({ pending }) {
 
 // Size picks are refused while a size download or any model load runs; they
 // stay available in the error state.
-// In direct mode the sizes are not used, so they are disabled too.
-export function sizeOptionsDisabled({ pending, modelState, switchState, sendMode }) {
-  if (sendMode === 'direct') return true;
+// They work in both send modes (the old-session viewer uses them).
+export function sizeOptionsDisabled({ pending, modelState, switchState }) {
   return !!pending || modelState === 'loading' || switchState === 'downloading';
 }
 
@@ -278,7 +279,7 @@ export function cardDecisions(card) {
 
 // "หยุด" only while `claude` runs (the thinking step).
 export function canStop(chat) {
-  return chat?.pendingStep === 'thinking';
+  return chat?.pendingStep === 'thinking' || chat?.pendingStep === 'translating_back';
 }
 
 // The work folder of what is open: an old session's, the chat's, or the one

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { MODEL_FLAGS, buildArgs, createClaudeRunner } from '../claude.js';
 import { detectLanguage } from '../lang.js';
-import { ENGLISH, TRANSLATE_FAILED, createPending, runTurn } from '../pipeline.js';
+import { ENGLISH, LOCAL_TRANSLATE, TRANSLATE_FAILED, createPending, runTurn } from '../pipeline.js';
 import { newId } from '../store.js';
 import { DATASETS } from './datasets.js';
 import { createAppender, isErrorLine, judgeKey, lastBy, pairKey, readLines } from './results.js';
@@ -187,7 +187,7 @@ export async function runBench({
       pending: createPending(), settings: { get: () => ({ claudeModel: model }) },
     };
     const start = now();
-    await runTurn(deps, chat, message, 'translate'); // condition B is the translate pipeline
+    await runTurn(deps, chat, message, LOCAL_TRANSLATE); // condition B is the local translate pipeline
     const total = now() - start;
     if (quotaHit) return null;
 

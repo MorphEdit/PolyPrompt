@@ -4,7 +4,7 @@ import {
   pickerLabel, pickerDisabled, answeredByLabel, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
   STOPPED_NOTE, TRUNCATED_NOTE, ONCE_ONLY_HINT, cardDecisions, canStop, currentFolder, canPickFolder, sendBody,
   sessionProgress, shortDate, nextTheme, themeToggleLabel, themeToggleIcon, loadTheme, saveTheme,
-  modelBannerShown, SEND_MODE_OPTIONS, SIZES_DIRECT_HINT, showsEnglish,
+  modelBannerShown, SEND_MODE_OPTIONS, SIZES_HINT, showsEnglish,
 } from './logic.js';
 
 const POLL_MS = 1000;
@@ -111,7 +111,7 @@ function updateComposer() {
   // The model state can change without a re-render of the chat (status poll),
   // so the retry button's state is kept in sync here too.
   if (retryButton) retryButton.disabled = !retryEnabled({ pending: isPending(), modelState: state.model.state, sendMode });
-  // Direct mode needs no translator: its banner shows only for an old
+  // No send mode needs the translator: its banner shows only for an old
   // session still waiting for its translation.
   const sessionWaiting = !!state.session && state.session.done < state.session.total;
   els.modelBanner.hidden = state.model.state === 'ready' || !modelBannerShown({ sendMode, sessionWaiting });
@@ -180,6 +180,7 @@ async function loadStatus() {
     const status = await api('GET', '/api/status');
     state.model = status.model;
     state.switch = status.switch ?? null;
+    state.modelIdle = !!status.idle;
     renderModel();
   } catch (err) {
     showError(err);
@@ -233,9 +234,9 @@ function renderPicker() {
   els.picker.textContent = settings ? pickerLabel(settings) : 'โมเดล';
   if (disabled) closePicker();
   if (!settings) return;
-  const direct = settings.sendMode === 'direct';
+  // A translator never started reports 'loading': size picks are open then.
   const sizesOff = sizeOptionsDisabled({
-    pending: isPending(), modelState: state.model.state, switchState: state.switch?.state, sendMode: settings.sendMode,
+    pending: isPending(), modelState: state.modelIdle ? 'idle' : state.model.state, switchState: state.switch?.state,
   });
   const loaded = state.model.state === 'ready' ? state.model.size : settings.translatorSize;
   const items = [];
@@ -255,10 +256,14 @@ function renderPicker() {
     }
   }
   items.push(sectionTitle('ตัวแปลภาษา'));
+  const sizesHint = document.createElement('div');
+  sizesHint.className = 'picker-section-hint';
+  sizesHint.textContent = SIZES_HINT;
+  items.push(sizesHint);
   for (const o of SIZE_OPTIONS) {
     items.push(pickerOption({
       name: o.label,
-      hint: direct ? SIZES_DIRECT_HINT : o.hint,
+      hint: o.hint,
       note: sizeOptionNote(o.value, settings.downloadedSizes),
       selected: o.value === loaded,
       disabled: sizesOff,
@@ -308,8 +313,8 @@ async function saveSettings(patch) {
       : err.message;
   }
   updateComposer();
-  // Translate mode starts the translator load: show its progress.
-  if (patch.translatorSize || patch.sendMode) loadStatus();
+  // A size pick starts the translator load: show its progress.
+  if (patch.translatorSize) loadStatus();
 }
 
 function pickSize(size) {

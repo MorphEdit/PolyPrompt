@@ -31,7 +31,8 @@ export function sendError(res, status, message) {
 }
 
 // Answers 503 when the translation model is not ready. Returns true when the
-// request may proceed.
+// request may proceed. No route needs it since translate mode stopped using
+// the local translator (kept for callers that do).
 export function requireModelReady(res, modelManager) {
   if (modelManager.isReady()) return true;
   sendError(res, 503, 'translation model is not ready');
@@ -118,18 +119,18 @@ function startTurn(deps, chat, message, mode) {
   runTurn(deps, chat, message, mode).catch((err) => console.error(err));
 }
 
-// The first pending step of a turn: a direct turn never translates.
-const firstStep = (mode) => (mode === 'direct' ? 'thinking' : 'translating');
-
 // API routes: { method, path (string, or RegExp with named groups), handler(ctx) }
 // where ctx = { req, res, params, query (URLSearchParams), deps }. Later issues append entries here.
 export const routes = [
   {
     method: 'GET',
     path: '/api/status',
+    // idle: the translator was never started (only the old-session viewer
+    // and a size pick start it), so its 'loading' state means nothing yet.
     handler: ({ res, deps }) => sendJson(res, 200, {
       model: deps.modelManager.status(),
       switch: deps.modelManager.switchStatus(),
+      ...(deps.modelManager.isStarted?.() === false ? { idle: true } : {}),
     }),
   },
   {
@@ -151,8 +152,6 @@ export const routes = [
       }
       if (body.claudeModel !== undefined) await deps.settings.update({ claudeModel: body.claudeModel });
       if (body.sendMode !== undefined) await deps.settings.update({ sendMode: body.sendMode });
-      // Translate mode needs the translator: load it now (a no-op once started).
-      if (body.sendMode === 'translate') modelManager.start?.();
       // The size is saved by the model manager once it has loaded.
       if (size !== undefined) modelManager.selectSize(size).done.catch((err) => console.error(err));
       sendJson(res, 200, settingsBody(deps));
@@ -221,9 +220,8 @@ export const routes = [
         if (!(await sessionExists(deps.projectsDir, folder, resumeSessionId))) return sendError(res, 404, ERR.sessionNotFound);
         if ((await deps.chatStore.usedSessionIds()).has(resumeSessionId)) return sendError(res, 409, ERR.sessionUsed);
       }
-      // Read once: decides the readiness check, the first step and the turn.
+      // Read once: the turn runs in this mode. Neither mode needs the local translator.
       const mode = sendModeOf(deps);
-      if (mode === 'translate' && !requireModelReady(res, deps.modelManager)) return;
       const pending = pendingOf(deps);
       let chat;
       if (chatId != null) {
@@ -243,7 +241,7 @@ export const routes = [
         });
       }
       // Claim the chat before any await so concurrent sends and deletes see it.
-      pending.set(chat.id, firstStep(mode));
+      pending.set(chat.id, 'thinking');
       const message = {
         id: newId(), role: 'user', original: text, english: null, lang: null,
         createdAt: new Date().toISOString(),
@@ -265,7 +263,6 @@ export const routes = [
     handler: async ({ res, params, deps }) => {
       // The mode current when the retry arrives (see the send route).
       const mode = sendModeOf(deps);
-      if (mode === 'translate' && !requireModelReady(res, deps.modelManager)) return;
       const pending = pendingOf(deps);
       const chat = await deps.chatStore.get(params.id);
       if (!chat) return sendError(res, 404, 'chat not found');
@@ -275,7 +272,7 @@ export const routes = [
       if (chat.messages.at(-1) !== message || message.role !== 'user' || !message.error) {
         return sendError(res, 409, 'only the last failed user message can be retried');
       }
-      pending.set(chat.id, firstStep(mode));
+      pending.set(chat.id, 'thinking');
       delete message.error;
       try {
         await deps.chatStore.save(chat);
@@ -312,9 +309,11 @@ export const routes = [
     handler: async ({ res, params, deps }) => {
       const chat = await deps.chatStore.get(params.id);
       if (!chat) return sendError(res, 404, ERR.chatNotFound);
-      // Only the thinking step runs claude; the translation steps finish as usual.
+      // Only the thinking and translating_back steps run claude.
       const turn = pendingOf(deps).turn(chat.id);
-      if (!turn?.running || pendingOf(deps).get(chat.id) !== 'thinking') return sendError(res, 409, ERR.notRunning);
+      const step = pendingOf(deps).get(chat.id);
+      const running = (turn?.running && step === 'thinking') || (turn && step === 'translating_back');
+      if (!running) return sendError(res, 409, ERR.notRunning);
       turn.stop();
       sendJson(res, 202, {});
     },
@@ -417,7 +416,7 @@ export function isTrustedRequest(req) {
   return hosts.some((h) => origin.toLowerCase() === `http://${h}`);
 }
 
-// deps: { modelManager, publicDir, chatStore, settings?, runner?, detect?, pending?, maxChars?,
+// deps: { modelManager, publicDir, chatStore, settings?, runner?, backTranslate?, detect?, pending?, maxChars?,
 // projectsDir? (Claude Code's ~/.claude/projects), sessionCacheDir? (old-session translations) }.
 export function createApp(options) {
   const deps = { detect: detectLanguage, ...options };

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { LANGUAGES, fromLegacyCode } from './lang.js';
+import { REPLY_LANGUAGES, fromLegacyCode } from './lang.js';
 
 export const TITLE_MAX = 50;
 export const INTERRUPTED_MESSAGE = 'การตอบกลับถูกขัดจังหวะ กรุณากดส่งใหม่';
@@ -35,11 +35,11 @@ const isChat = (c) => c !== null && typeof c === 'object'
   && typeof c.id === 'string' && Array.isArray(c.messages);
 
 // Chats saved before TranslateGemma hold NLLB codes (tha_Thai): map them to
-// ISO 639-1. A chat language that is no longer supported becomes null.
+// ISO 639-1. A chat language translate mode cannot answer in becomes null.
 function upgradeLangs(chat) {
   if (chat.lang != null) {
     const lang = fromLegacyCode(chat.lang);
-    chat.lang = Object.hasOwn(LANGUAGES, lang) ? lang : null;
+    chat.lang = Object.hasOwn(REPLY_LANGUAGES, lang) ? lang : null;
   }
   for (const m of chat.messages) {
     if (m && typeof m === 'object' && m.lang != null) m.lang = fromLegacyCode(m.lang);

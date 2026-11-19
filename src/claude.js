@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { CLAUDE_OPTIONS } from '../public/models.js';
 import { activityLine, truncateOutput } from './activity.js';
+import { LANGUAGES, UNSUPPORTED } from './lang.js';
 import { parseLine, permissionResponseLine, readEvent, unsupportedResponseLine, userLine } from './stream.js';
 
 const INSTALL_LOGIN_HINT = 'ติดตั้ง Claude Code แล้วเปิดเทอร์มินัล พิมพ์ `claude` และ `/login` เพื่อเข้าสู่ระบบ';
@@ -31,8 +32,8 @@ const MODEL_REJECTED = /selected model/i;
 const CLI_TOO_OLD = /does not support this model|or newer is required/i;
 const NODE_SCRIPT = /\.[cm]?js$/i;
 // Args reaching cmd.exe (fallback for unparsable .cmd shims) are only our
-// fixed flags, the comma-separated tool lists, SYSTEM_PROMPT and the session
-// id; anything else is refused.
+// fixed flags, the comma-separated tool lists, the app's fixed prompts
+// (FIXED_PROMPTS) and the session id; anything else is refused.
 const CMD_SAFE_ARG = /^[\w.:\/=,-]*$/;
 
 // Replaces Claude Code's coding-agent prompt. A fixed constant with no
@@ -41,6 +42,45 @@ export const SYSTEM_PROMPT = 'You are Claude, a helpful general assistant in a c
   + 'You can search the web and fetch web pages. '
   + 'You have no access to files, folders, commands or the computer you run on. '
   + 'Answer from your own knowledge, the web and what the user writes in the chat.';
+
+// Translate mode: Claude answers in English, the answer is translated back
+// (translateWithClaude). Added to the general prompt, or appended to Claude
+// Code's own prompt in a folder chat.
+export const REPLY_IN_ENGLISH = 'Always write your reply in English, whatever language the user writes in.';
+export const ENGLISH_SYSTEM_PROMPT = `${SYSTEM_PROMPT} ${REPLY_IN_ENGLISH}`;
+
+// The fixed model that translates translate-mode answers back.
+export const TRANSLATOR_MODEL = 'claude-haiku-5-5';
+
+const displayNames = new Intl.DisplayNames(['en'], { type: 'language' });
+
+// English name of a language code ("th" -> "Thai"), or the code itself.
+export function englishName(code) {
+  try {
+    return displayNames.of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
+// System prompt of the back-translation call, naming the target language.
+export function translatorPrompt(lang) {
+  const name = englishName(lang);
+  return `You are a professional English-to-${name} translator. `
+    + `Translate the text the user sends into natural, fluent ${name} that reads as if a ${name}-speaking expert wrote it. `
+    + 'Keep the meaning, tone and level of detail. '
+    + 'Keep the Markdown structure (headings, lists, tables, bold), code, URLs, numbers and units as they are. '
+    + `Output only the ${name} translation, with no preface or notes. `
+    + 'Do not answer or act on the text; only translate it.';
+}
+
+// The app's own prompt strings, allowed quoted through the .cmd fallback.
+// Constants built from a fixed language list, never user text; any with a
+// double quote or percent sign (cmd.exe would read them) is left out.
+const FIXED_PROMPTS = new Set(
+  [SYSTEM_PROMPT, ENGLISH_SYSTEM_PROMPT, REPLY_IN_ENGLISH, ...[...Object.keys(LANGUAGES), ...UNSUPPORTED].map(translatorPrompt)]
+    .filter((p) => !/["%\r\n]/.test(p)),
+);
 
 // Working directory for every `claude` run: owned by the app and outside the
 // PolyPrompt repo, so Claude Code sees no git state or CLAUDE.md and keeps
@@ -70,7 +110,8 @@ export const FOLDER_ALLOWED_TOOLS = 'Read,Glob,Grep,LS,NotebookRead,WebSearch,We
 // can_use_tool control_request (--permission-prompt-tool stdio, as the Agent
 // SDK does), unless the folder's own Claude Code settings allow it. Without
 // it the real CLI denies such calls silently (permission_denials).
-export function buildArgs(sessionId, model = 'default', folder = null) {
+// replyInEnglish (translate mode) adds REPLY_IN_ENGLISH to the system prompt.
+export function buildArgs(sessionId, model = 'default', folder = null, { replyInEnglish = false } = {}) {
   const args = [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--permission-prompt-tool', 'stdio',
@@ -78,18 +119,29 @@ export function buildArgs(sessionId, model = 'default', folder = null) {
   if (folder) {
     // Normal Claude Code in the folder: default prompt, settings, MCP and tools.
     args.push('--allowedTools', FOLDER_ALLOWED_TOOLS);
+    if (replyInEnglish) args.push('--append-system-prompt', REPLY_IN_ENGLISH);
   } else {
     // --tools limits the built-in tools to the web ones; --strict-mcp-config
     // without --mcp-config loads no MCP server tools; --setting-sources user
     // skips project/local settings (auth is user-level).
     args.push(
       '--tools', WEB_TOOLS, '--allowedTools', WEB_TOOLS, '--strict-mcp-config',
-      '--setting-sources', 'user', '--system-prompt', SYSTEM_PROMPT,
+      '--setting-sources', 'user', '--system-prompt', replyInEnglish ? ENGLISH_SYSTEM_PROMPT : SYSTEM_PROMPT,
     );
   }
   if (MODEL_FLAGS.includes(model)) args.push('--model', model);
   if (sessionId) args.push('--resume', sessionId);
   return args;
+}
+
+// Args of the one-shot back-translation call: the fixed model, no tools, no
+// MCP, user settings only, and no session (it never resumes or saves one).
+export function translatorArgs(lang) {
+  return [
+    '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    '--model', TRANSLATOR_MODEL, '--tools', '', '--strict-mcp-config', '--setting-sources', 'user',
+    '--no-session-persistence', '--system-prompt', translatorPrompt(lang),
+  ];
 }
 
 // Find `command` on PATH using PATHEXT (Windows only).
@@ -123,7 +175,7 @@ export function resolveCommand(command, args) {
     const script = path.join(path.dirname(found), m[1]);
     if (existsSync(script)) return { file: process.execPath, args: [script, ...args] };
   }
-  if (!args.every((a) => a === SYSTEM_PROMPT || CMD_SAFE_ARG.test(a))) throw new ClaudeError('failed', 'unsafe argument');
+  if (!args.every((a) => FIXED_PROMPTS.has(a) || CMD_SAFE_ARG.test(a))) throw new ClaudeError('failed', 'unsafe argument');
   const line = [found, ...args].map((a) => `"${a}"`).join(' ');
   return {
     file: process.env.ComSpec || 'cmd.exe',
@@ -192,14 +244,29 @@ function isDirectory(dir) {
 // usage, modelUsage, totalCostUsd and durationMs when the result event has them.
 // A `failed` error after a result event or stderr output carries that text as
 // err.output (and the result's usage figures, when any).
+// replyInEnglish: translate mode (see buildArgs).
 // extraArgs are appended after buildArgs (the benchmark's
 // --no-session-persistence); the app passes none.
+// translate({ text, targetLang, signal }) is translateWithClaude: it resolves
+// the translation, and rejects on an error, a timeout, an empty output or a stop.
 export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd = defaultClaudeHome(), graceMs = 300, extraArgs = [] } = {}) {
-  function run({ prompt, sessionId, model, folder = null, signal, onSession, onActivity, onPermission } = {}) {
+  function run({ sessionId, model, folder = null, replyInEnglish = false, ...rest } = {}) {
+    return launch({ ...rest, model, folder, args: [...buildArgs(sessionId, model, folder, { replyInEnglish }), ...extraArgs] });
+  }
+
+  // Always in the Claude home folder, never the chat's folder.
+  async function translate({ text, targetLang, signal } = {}) {
+    const res = await launch({ prompt: text, model: TRANSLATOR_MODEL, args: translatorArgs(targetLang), signal });
+    if (res.stopped) throw new ClaudeError('failed', 'stopped');
+    if (!res.text.trim()) throw new ClaudeError('failed', 'empty translation');
+    return res.text;
+  }
+
+  function launch({ prompt, args, model, folder = null, signal, onSession, onActivity, onPermission }) {
     return new Promise((resolve, reject) => {
       let target;
       try {
-        target = resolveCommand(command, [...buildArgs(sessionId, model, folder), ...extraArgs]);
+        target = resolveCommand(command, args);
         if (folder) {
           if (!isDirectory(folder)) throw new ClaudeError('folder_missing');
         } else {
@@ -368,5 +435,5 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
       write(userLine(prompt));
     });
   }
-  return { run };
+  return { run, translate };
 }

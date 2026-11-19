@@ -188,14 +188,22 @@ test('old chats with NLLB codes load with ISO codes; the mapped values are writt
   assert.deepEqual(saved.messages.map((m) => m.lang), ['th', 'th', 'en', null, 'th']);
 });
 
-test('an old chat language that is now unsupported becomes null; message langs keep the ISO code', async (t) => {
+test('an old chat language translate mode cannot answer in becomes null; message langs keep the ISO code', async (t) => {
   const dir = await tempDir(t);
   const id = '11111111-2222-4333-8444-666666666666';
   await writeFile(path.join(dir, id + '.json'), JSON.stringify({
-    id, title: 'old', sessionId: null, lang: 'amh_Ethi',
+    id, title: 'old', sessionId: null, lang: 'zul_Latn',
     messages: [{ id: 'm1', role: 'user', original: 'x', english: 'x', lang: 'amh_Ethi', createdAt: 'x' }],
   }));
   const chat = await createChatStore({ dir }).get(id);
   assert.equal(chat.lang, null);
   assert.equal(chat.messages[0].lang, 'am');
+});
+
+test('#71: a chat language outside TranslateGemma (Amharic, Lao) is kept: Claude Haiku translates into it', async (t) => {
+  const dir = await tempDir(t);
+  for (const [id, lang, want] of [['11111111-2222-4333-8444-666666666667', 'amh_Ethi', 'am'], ['11111111-2222-4333-8444-666666666668', 'lo', 'lo']]) {
+    await writeFile(path.join(dir, id + '.json'), JSON.stringify({ id, title: 'old', sessionId: null, lang, messages: [] }));
+    assert.equal((await createChatStore({ dir }).get(id)).lang, want);
+  }
 });

@@ -47,8 +47,8 @@ export async function start({
     app.listen(port, HOST, () => {
       const { address, port } = app.address();
       console.log(`http://${address}:${port}`);
-      // Direct mode needs no translator: it loads on first need (see server.js).
-      if (settings.get().sendMode === 'translate') modelManager.start();
+      // Neither send mode needs the local translator: it loads when the
+      // old-session viewer first needs it (see sessions.js).
       resolve(app);
     });
   });
