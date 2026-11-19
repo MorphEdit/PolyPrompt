@@ -1,0 +1,70 @@
+{
+  "run": "full-2026-11-18",
+  "date": "2026-11-18T15:19:50.523Z",
+  "seed": 20261118,
+  "sets": [
+    "mgsm",
+    "belebele",
+    "open"
+  ],
+  "model": "claude-opus-5-5",
+  "judgeModel": "claude-opus-5-5",
+  "translator": "4b",
+  "claudeArgs": [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-prompt-tool",
+    "stdio",
+    "--tools",
+    "WebSearch,WebFetch",
+    "--allowedTools",
+    "WebSearch,WebFetch",
+    "--strict-mcp-config",
+    "--setting-sources",
+    "user",
+    "--system-prompt",
+    "You are Claude, a helpful general assistant in a chat. You can search the web and fetch web pages. You have no access to files, folders, commands or the computer you run on. Answer from your own knowledge, the web and what the user writes in the chat.",
+    "--model",
+    "claude-opus-5-5",
+    "--no-session-persistence"
+  ],
+  "claudeVersion": "2.1.314 (Claude Code)",
+  "machine": {
+    "cpu": "AMD Ryzen 5 5600X 6-Core Processor             ",
+    "gpu": "NVIDIA GeForce RTX 4060",
+    "vram": "8188 MiB"
+  },
+  "datasets": {
+    "mgsm": {
+      "repo": "juletxara/mgsm",
+      "rev": "b2f13d426afe3be8d69a7e739b36724db8b66bbc",
+      "files": [
+        "th/test-00000-of-00001.parquet"
+      ]
+    },
+    "belebele": {
+      "repo": "facebook/belebele",
+      "rev": "7899cdfa4e1e0d733fd77c848e2c273cb1d32be2",
+      "files": [
+        "data/tha_Thai.jsonl"
+      ]
+    },
+    "open": {
+      "repo": "airesearch/WangchanThaiInstruct",
+      "rev": "9099b833a1b6b9d471d7e6f4abb22bf88f318bd4",
+      "files": [
+        "data/test-00000-of-00001.parquet"
+      ]
+    }
+  },
+  "prompts": {
+    "mgsm": "{question}\n\nตอบโดยแสดงวิธีคิดสั้น ๆ แล้วจบด้วยบรรทัด \"คำตอบ: <ตัวเลข>\"",
+    "belebele": "{flores_passage}\n\n{question}\n\n1. {mc_answer1}\n2. {mc_answer2}\n3. {mc_answer3}\n4. {mc_answer4}\n\nตอบด้วยบรรทัด \"คำตอบ: <หมายเลข 1-4>\"",
+    "open": "{Instruction}  (+ \"\\n\\n\" + {Input} when Input is a non-empty string after .trim())"
+  },
+  "judgePrompt": "คุณเป็นผู้ตัดสินที่เป็นกลาง ให้เปรียบเทียบคำตอบสองคำตอบต่อคำสั่งด้านล่าง โดยใช้คำตอบอ้างอิงที่มนุษย์เขียนเป็นแนวทาง\nพิจารณาความถูกต้อง ความครบถ้วน การทำตามคำสั่ง และความเป็นธรรมชาติของภาษาไทย ไม่ต้องสนใจความยาวหรือลำดับของคำตอบ\n\n### คำสั่ง\n{instruction}\n\n### คำตอบอ้างอิง\n{reference}\n\n### คำตอบ 1\n{answer1}\n\n### คำตอบ 2\n{answer2}\n\nตอบเป็น JSON บรรทัดเดียวเท่านั้น: {\"winner\": 1 | 2 | \"tie\", \"reason\": \"<เหตุผลสั้น ๆ>\"}"
+}
