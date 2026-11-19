@@ -47,7 +47,8 @@ export async function start({
     app.listen(port, HOST, () => {
       const { address, port } = app.address();
       console.log(`http://${address}:${port}`);
-      modelManager.start();
+      // Direct mode needs no translator: it loads on first need (see server.js).
+      if (settings.get().sendMode === 'translate') modelManager.start();
       resolve(app);
     });
   });

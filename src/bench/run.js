@@ -2,7 +2,7 @@
 // and B (the real runTurn pipeline), then the blind judge for `open`.
 // Everything outside (datasets, translator, `claude` command) is passed in,
 // so the tests run it with a fake `claude` and a fake translator.
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { MODEL_FLAGS, buildArgs, createClaudeRunner } from '../claude.js';
@@ -83,16 +83,33 @@ export async function runBench({
   const runner = createClaudeRunner({ command, extraArgs: EXTRA_ARGS, ...(timeoutMs ? { timeoutMs } : {}), ...(cwd ? { cwd } : {}) });
   const claudeArgs = [...buildArgs(null, model, null), ...EXTRA_ARGS];
   const metaFile = path.join(outDir, 'meta.json');
-  if (!(await exists(metaFile))) {
-    const meta = {
+  const datasetOf = (s) => ({ repo: DATASETS[s].repo, rev: DATASETS[s].rev, files: DATASETS[s].files.map((f) => f.path) });
+  let meta;
+  if (await exists(metaFile)) {
+    // A resume: the run keeps its model, judge and translator (mixing them in
+    // one set of pairs is no valid comparison); new sets join the run.
+    meta = JSON.parse(await readFile(metaFile, 'utf8'));
+    const given = { model, judgeModel, translator };
+    const flags = { model: '--model', judgeModel: '--judge-model', translator: '--translator' };
+    const changed = Object.keys(given).find((k) => meta[k] !== given[k]);
+    if (changed) {
+      return { code: 1, message: `run ${run} was started with ${flags[changed]} ${meta[changed]}; resume it with that or use a new --run` };
+    }
+    meta.sets = SETS.filter((s) => meta.sets.includes(s) || sets.includes(s));
+    for (const s of sets) {
+      meta.datasets[s] ??= datasetOf(s);
+      meta.prompts[s] ??= PROMPTS[s];
+    }
+  } else {
+    meta = {
       run, date: new Date().toISOString(), seed: SEED, sets, model, judgeModel, translator, claudeArgs, claudeVersion, machine,
-      datasets: Object.fromEntries(sets.map((s) => [s, { repo: DATASETS[s].repo, rev: DATASETS[s].rev, files: DATASETS[s].files.map((f) => f.path) }])),
+      datasets: Object.fromEntries(sets.map((s) => [s, datasetOf(s)])),
       prompts: Object.fromEntries(sets.map((s) => [s, PROMPTS[s]])),
       judgePrompt: JUDGE_PROMPT,
     };
-    await mkdir(outDir, { recursive: true });
-    await writeFile(metaFile, JSON.stringify(meta, null, 2) + '\n', 'utf8');
   }
+  await mkdir(outDir, { recursive: true });
+  await writeFile(metaFile, JSON.stringify(meta, null, 2) + '\n', 'utf8');
 
   const append = createAppender();
   let quota = false;
@@ -148,13 +165,18 @@ export async function runBench({
         }
       },
     };
+    // Each step's time is wall-clock while at least one of its calls is in
+    // flight, so pieces that translate concurrently are counted once.
+    const inFlight = { forward: 0, back: 0 };
+    const since = { forward: 0, back: 0 };
     const wrappedTranslator = {
       async translate(text, src, tgt) {
-        const start = now();
+        const step = tgt === ENGLISH ? 'forward' : 'back';
+        if (inFlight[step]++ === 0) since[step] = now();
         try {
           return await modelManager.translate(text, src, tgt);
         } finally {
-          ms[tgt === ENGLISH ? 'forward' : 'back'] += now() - start;
+          if (--inFlight[step] === 0) ms[step] += now() - since[step];
         }
       },
     };
@@ -165,7 +187,7 @@ export async function runBench({
       pending: createPending(), settings: { get: () => ({ claudeModel: model }) },
     };
     const start = now();
-    await runTurn(deps, chat, message);
+    await runTurn(deps, chat, message, 'translate'); // condition B is the translate pipeline
     const total = now() - start;
     if (quotaHit) return null;
 
@@ -227,7 +249,11 @@ export async function runBench({
       const a = pairs.get(`${id}\u0000A`)?.value;
       const b = pairs.get(`${id}\u0000B`)?.value;
       if (!a || !b || isErrorLine(a) || isErrorLine(b)) continue;
-      for (const order of [1, 2]) if (due(last, `${id}\u0000${order}`)) work.push({ id, order, a, b });
+      // An order with no line yet is always due: under --retry-failed its A or B may only just have been repaired (#63).
+      for (const order of [1, 2]) {
+        const key = `${id}\u0000${order}`;
+        if (!last.has(key) || due(last, key)) work.push({ id, order, a, b });
+      }
     }
     log(`judge: ${work.length} call(s) to run`);
     await pool(work, concurrency, stopped, async ({ id, order, a, b }) => {

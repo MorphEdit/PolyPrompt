@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,10 +80,12 @@ test('settings default to settings.json next to the chats dir and are read back 
   const loads = [];
   const load = (onProgress, { size }) => { loads.push(size); return Promise.resolve({ translate: async (s) => s }); };
   const opts = { port: 0, load, download: async () => {}, downloaded: (s) => s === '4b' || s === '12b', chatsDir };
+  // Translate mode loads the translator at startup (direct mode, the default, does not).
+  writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ sendMode: 'translate' }));
   let server = await start(opts);
   let port = server.address().port;
   let r = await request(port, 'GET', '/api/settings');
-  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'default', downloadedSizes: ['4b', '12b'] });
+  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'default', sendMode: 'translate', downloadedSizes: ['4b', '12b'] });
   r = await request(port, 'PUT', '/api/settings', {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ claudeModel: 'claude-haiku-5-5', translatorSize: '12b' }),
@@ -95,7 +97,7 @@ test('settings default to settings.json next to the chats dir and are read back 
   await new Promise((res) => setTimeout(res, 50));
   await close(server);
   const saved = JSON.parse(readFileSync(path.join(dir, 'settings.json'), 'utf8'));
-  assert.deepEqual(saved, { translatorSize: '12b', claudeModel: 'claude-haiku-5-5' });
+  assert.deepEqual(saved, { translatorSize: '12b', claudeModel: 'claude-haiku-5-5', sendMode: 'translate' });
 
   server = await start(opts);
   t.after(() => close(server));
@@ -104,7 +106,7 @@ test('settings default to settings.json next to the chats dir and are read back 
     await new Promise((res) => setTimeout(res, 10));
   }
   r = await request(port, 'GET', '/api/settings');
-  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'claude-haiku-5-5', downloadedSizes: ['4b', '12b'] });
+  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'claude-haiku-5-5', sendMode: 'translate', downloadedSizes: ['4b', '12b'] });
   assert.equal((await request(port, 'GET', '/api/status')).json.model.size, '12b');
   assert.deepEqual(loads, ['4b', '12b', '12b']);
 });

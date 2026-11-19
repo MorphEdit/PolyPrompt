@@ -1,6 +1,12 @@
 # PolyPrompt
 
-Type a prompt in any language; PolyPrompt translates it to English and sends it to an AI.
+Type a prompt in any language and chat with Claude through your own Claude Code.
+
+By default (**ส่งตรง**, direct mode) the message goes to Claude exactly as typed and Claude
+answers in the same language: in our [token benchmark](#token-benchmark) this gave clearly
+better answers than translating first. The optional **แปลเป็นอังกฤษก่อน** (translate mode)
+translates the prompt to English and the answer back with a local model, which saves about
+20–30% of tokens but needs the translator download (below).
 
 ## Getting started
 
@@ -24,9 +30,14 @@ PolyPrompt translates locally with Google's [TranslateGemma](https://huggingface
 run inside the app by [`node-llama-cpp`](https://node-llama-cpp.withcat.ai/) from a GGUF file.
 Nothing else needs to be installed.
 
-On the first `npm start` the app downloads the default 4B model
+The translator is only needed in translate mode and for translating old Claude Code sessions.
+In direct mode (the default) nothing is downloaded or loaded at startup; the download/load
+starts the first time the translator is needed: switching to translate mode, or opening an old
+Claude Code session that is not translated yet.
+
+The first time, the app downloads the default 4B model
 (`translategemma-4b-it.Q4_K_M.gguf` from `mradermacher/translategemma-4b-it-GGUF`, about 2.5 GB)
-and caches it in `.cache/models/` (git-ignored). The page shows the download progress; sending is
+and caches it in `.cache/models/` (git-ignored). The page shows the download progress; in translate mode sending is
 blocked until the model is ready. An interrupted download resumes on the next try, and a partial
 file is never loaded. Later runs load it from the cache, and translation then works offline.
 The GPU is used automatically when there is one (CUDA, Vulkan or Metal); otherwise the model runs
@@ -43,10 +54,14 @@ is shown in English, each with a note.
 
 ## Choosing the models
 
-The model button next to Send (for example "แปล 4B · Claude ค่าเริ่มต้น") opens a menu with two parts.
-Both choices are saved in `data/settings.json` (next to the chats folder) and kept after a restart.
+The model button next to Send (for example "ส่งตรง · Claude ค่าเริ่มต้น", or "แปล 4B · Claude ค่าเริ่มต้น"
+in translate mode) opens a menu with three parts. All choices are saved in `data/settings.json` (next to the chats folder) and kept after a restart.
 
-- **ตัวแปลภาษา (translator size):** 4B (default, about 2.5 GB, fast), 12B (about 7.3 GB, better,
+- **การส่ง (send mode):** ส่งตรง (direct, the default and recommended: the message is sent as
+  typed and Claude answers in your language) or แปลเป็นอังกฤษก่อน (translate first: saves about
+  20–30% of tokens, but answers can be wrong or read oddly; needs the translator). The choice
+  applies from the next message and the chat keeps its Claude session, so one chat can mix both.
+- **ตัวแปลภาษา (translator size, translate mode only):** 4B (default, about 2.5 GB, fast), 12B (about 7.3 GB, better,
   needs more RAM/VRAM) or 27B (about 16.5 GB, best, slow, needs a lot of RAM). The larger sizes are
   optional downloads: picking one that is not downloaded asks first, then downloads it in the
   background while the current model keeps translating, and switches when it is done. If the new
@@ -60,7 +75,7 @@ Both choices are saved in `data/settings.json` (next to the chats folder) and ke
 
 ## Claude Code
 
-PolyPrompt sends the English prompt to Claude through your own
+PolyPrompt sends the prompt (as typed, or in English in translate mode) to Claude through your own
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI, so Claude Code
 must be installed and logged in: run `claude` once in a terminal and type `/login`.
 No API key is used. Each chat continues its own Claude Code session. If `claude`
@@ -104,7 +119,8 @@ npm run bench:report -- --run <id>
   WangchanThaiInstruct), checked by SHA-256 and cached in `.cache/bench/`. The
   frozen, seeded sample is `bench/sample.json`.
 - Rerunning with the same `--run` resumes; `--retry-failed` reruns only the
-  failed items. When Claude's usage quota runs out the run stops (exit code 2)
+  failed items, and judges any `open` item whose answers it just repaired. A resume may add other `--sets` to the run, but must keep its
+  `--model`, `--judge-model` and `--translator` (use a new `--run` to change them). When Claude's usage quota runs out the run stops (exit code 2)
   and can be resumed later with the same `--run`.
 - It uses real Claude calls and your quota; it is not part of `npm test`.
 

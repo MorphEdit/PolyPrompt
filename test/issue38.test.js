@@ -66,7 +66,7 @@ test('#38 old alias values migrate to full IDs on read', async (t) => {
   const file = path.join(dir, 'settings.json');
   for (const [old, id] of [['opus', 'claude-opus-5-5'], ['sonnet', 'claude-sonnet-5-5'], ['haiku', 'claude-haiku-5-5']]) {
     await writeFile(file, JSON.stringify({ translatorSize: '12b', claudeModel: old }));
-    assert.deepEqual((await createSettingsStore({ file })).get(), { translatorSize: '12b', claudeModel: id });
+    assert.deepEqual((await createSettingsStore({ file })).get(), { translatorSize: '12b', claudeModel: id, sendMode: 'direct' });
   }
 });
 

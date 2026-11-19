@@ -14,6 +14,7 @@ import { resolveCommand } from '../src/claude.js';
 import { createModelManager } from '../src/model.js';
 import { SIZES, downloadModel, isSize, loadTranslateGemma } from '../src/translator.js';
 import { loadRows } from '../src/bench/datasets.js';
+import { gpuLoad } from '../src/bench/gpu.js';
 import { DEFAULT_MODEL, SETS, checkModel, runBench } from '../src/bench/run.js';
 import { buildSample, sampleJson } from '../src/bench/sample.js';
 
@@ -75,7 +76,8 @@ function exec(file, argv) {
 async function machine() {
   const gpu = await exec('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader']);
   const [name, vram] = gpu ? gpu.split('\n')[0].split(',').map((s) => s.trim()) : [null, null];
-  return { cpu: os.cpus()[0]?.model ?? null, gpu: name, vram };
+  // Before the translator loads, so its own GPU use is not counted.
+  return { cpu: os.cpus()[0]?.model ?? null, gpu: name, vram, gpuLoad: await gpuLoad(exec) };
 }
 
 // The frozen sample: read when present, else built from all three sets once.
@@ -98,6 +100,7 @@ try {
   fail(err.message);
 }
 
+const machineInfo = await machine();
 const modelManager = createModelManager({
   load: async (onProgress, { size }) => {
     await downloadModel(size, () => {});
@@ -115,7 +118,7 @@ const result = await runBench({
   run, sets, model: args.model, judgeModel: args['judge-model'], translator: args.translator,
   limit, concurrency, retryFailed: args['retry-failed'], sample, rows, modelManager,
   claudeVersion: await exec('claude', ['--version']),
-  machine: await machine(),
+  machine: machineInfo,
   log: (line) => console.log(line),
 });
 await modelManager.translator()?.dispose?.();

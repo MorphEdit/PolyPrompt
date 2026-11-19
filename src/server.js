@@ -4,9 +4,9 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { FolderError, checkFolder, listFolders } from './folders.js';
 import { detectLanguage } from './lang.js';
-import { DECISIONS, createPending, runTurn } from './pipeline.js';
+import { DECISIONS, createPending, runTurn, sendModeOf } from './pipeline.js';
 import { createSessionViewer, defaultProjectsDir, isValidSessionId, listSessions, sessionExists } from './sessions.js';
-import { isClaudeModel } from './settings.js';
+import { isClaudeModel, isSendMode } from './settings.js';
 import { newId } from './store.js';
 import { isSize } from './translator.js';
 
@@ -94,17 +94,17 @@ async function readJson(req) {
 }
 
 function settingsBody(deps) {
-  const { translatorSize, claudeModel } = deps.settings.get();
-  return { translatorSize, claudeModel, downloadedSizes: deps.modelManager.downloadedSizes() };
+  const { translatorSize, claudeModel, sendMode } = deps.settings.get();
+  return { translatorSize, claudeModel, sendMode, downloadedSizes: deps.modelManager.downloadedSizes() };
 }
 
-const SETTING_CHECKS = { translatorSize: isSize, claudeModel: isClaudeModel };
+const SETTING_CHECKS = { translatorSize: isSize, claudeModel: isClaudeModel, sendMode: isSendMode };
 
 // Returns an error message for an invalid PUT /api/settings body, else null.
 function settingsBodyError(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return 'body must be an object';
   const keys = Object.keys(body);
-  if (keys.length === 0) return 'translatorSize or claudeModel is required';
+  if (keys.length === 0) return 'translatorSize, claudeModel or sendMode is required';
   for (const key of keys) {
     if (!Object.hasOwn(SETTING_CHECKS, key)) return `unknown setting: ${key}`;
     if (!SETTING_CHECKS[key](body[key])) return `invalid ${key}`;
@@ -112,10 +112,14 @@ function settingsBodyError(body) {
   return null;
 }
 
-// Starts the turn in the background; the pending entry is already set.
-function startTurn(deps, chat, message) {
-  runTurn(deps, chat, message).catch((err) => console.error(err));
+// Starts the turn in the background, in the mode the route read; the
+// pending entry is already set.
+function startTurn(deps, chat, message, mode) {
+  runTurn(deps, chat, message, mode).catch((err) => console.error(err));
 }
+
+// The first pending step of a turn: a direct turn never translates.
+const firstStep = (mode) => (mode === 'direct' ? 'thinking' : 'translating');
 
 // API routes: { method, path (string, or RegExp with named groups), handler(ctx) }
 // where ctx = { req, res, params, query (URLSearchParams), deps }. Later issues append entries here.
@@ -146,6 +150,9 @@ export const routes = [
         return sendError(res, 409, 'the translator size is already changing');
       }
       if (body.claudeModel !== undefined) await deps.settings.update({ claudeModel: body.claudeModel });
+      if (body.sendMode !== undefined) await deps.settings.update({ sendMode: body.sendMode });
+      // Translate mode needs the translator: load it now (a no-op once started).
+      if (body.sendMode === 'translate') modelManager.start?.();
       // The size is saved by the model manager once it has loaded.
       if (size !== undefined) modelManager.selectSize(size).done.catch((err) => console.error(err));
       sendJson(res, 200, settingsBody(deps));
@@ -214,7 +221,9 @@ export const routes = [
         if (!(await sessionExists(deps.projectsDir, folder, resumeSessionId))) return sendError(res, 404, ERR.sessionNotFound);
         if ((await deps.chatStore.usedSessionIds()).has(resumeSessionId)) return sendError(res, 409, ERR.sessionUsed);
       }
-      if (!requireModelReady(res, deps.modelManager)) return;
+      // Read once: decides the readiness check, the first step and the turn.
+      const mode = sendModeOf(deps);
+      if (mode === 'translate' && !requireModelReady(res, deps.modelManager)) return;
       const pending = pendingOf(deps);
       let chat;
       if (chatId != null) {
@@ -234,7 +243,7 @@ export const routes = [
         });
       }
       // Claim the chat before any await so concurrent sends and deletes see it.
-      pending.set(chat.id, 'translating');
+      pending.set(chat.id, firstStep(mode));
       const message = {
         id: newId(), role: 'user', original: text, english: null, lang: null,
         createdAt: new Date().toISOString(),
@@ -247,14 +256,16 @@ export const routes = [
         throw err;
       }
       sendJson(res, 202, { chatId: chat.id, messageId: message.id });
-      startTurn(deps, chat, message);
+      startTurn(deps, chat, message, mode);
     },
   },
   {
     method: 'POST',
     path: RETRY_PATH,
     handler: async ({ res, params, deps }) => {
-      if (!requireModelReady(res, deps.modelManager)) return;
+      // The mode current when the retry arrives (see the send route).
+      const mode = sendModeOf(deps);
+      if (mode === 'translate' && !requireModelReady(res, deps.modelManager)) return;
       const pending = pendingOf(deps);
       const chat = await deps.chatStore.get(params.id);
       if (!chat) return sendError(res, 404, 'chat not found');
@@ -264,7 +275,7 @@ export const routes = [
       if (chat.messages.at(-1) !== message || message.role !== 'user' || !message.error) {
         return sendError(res, 409, 'only the last failed user message can be retried');
       }
-      pending.set(chat.id, 'translating');
+      pending.set(chat.id, firstStep(mode));
       delete message.error;
       try {
         await deps.chatStore.save(chat);
@@ -273,7 +284,7 @@ export const routes = [
         throw err;
       }
       sendJson(res, 202, { chatId: chat.id, messageId: message.id });
-      startTurn(deps, chat, message);
+      startTurn(deps, chat, message, mode);
     },
   },
   {

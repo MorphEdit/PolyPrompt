@@ -1,10 +1,12 @@
 // REPORT.md of a benchmark run, from meta.json and the result lines. The
 // numbers come from computeReport (tested); renderReport only formats them.
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isErrorLine, judgeKey, lastBy, pairKey, readLines } from './results.js';
+import { gpuLoadText } from './gpu.js';
 import { judgeOutcome } from './judge.js';
-import { SCORED } from './run.js';
+import { SCORED, SETS } from './run.js';
 import { bootstrapCI, discordant, mcnemar, mean, median, pairedPct, wilson } from './stats.js';
 
 const n0 = (v) => (typeof v === 'number' ? v : 0);
@@ -41,16 +43,23 @@ export function pairsOf(entries) {
   return { pairs, last };
 }
 
+// Raw token sums weigh a cache read like an output token; the cost (the
+// result's total_cost_usd) weighs them as billed.
+export const COST_LABEL = 'API-equivalent cost (USD)';
+
+function pairStats(p) {
+  return {
+    A: { median: median(p.map((x) => x.a)), mean: mean(p.map((x) => x.a)) },
+    B: { median: median(p.map((x) => x.b)), mean: mean(p.map((x) => x.b)) },
+    pct: pairedPct(p),
+    ci: bootstrapCI(p),
+  };
+}
+
 export function tokenStats(pairs) {
-  return Object.fromEntries(TOKEN_METRICS.map(([key]) => {
-    const p = pairs.map(({ A, B }) => ({ a: tokensOf(A)[key], b: tokensOf(B)[key] }));
-    return [key, {
-      A: { median: median(p.map((x) => x.a)), mean: mean(p.map((x) => x.a)) },
-      B: { median: median(p.map((x) => x.b)), mean: mean(p.map((x) => x.b)) },
-      pct: pairedPct(p),
-      ci: bootstrapCI(p),
-    }];
-  }));
+  const out = Object.fromEntries(TOKEN_METRICS.map(([key]) => [key, pairStats(pairs.map(({ A, B }) => ({ a: tokensOf(A)[key], b: tokensOf(B)[key] })))]));
+  out.cost = pairStats(pairs.map(({ A, B }) => ({ a: n0(A.totalCostUsd), b: n0(B.totalCostUsd) })));
+  return out;
 }
 
 export function qualityStats(pairs) {
@@ -140,9 +149,9 @@ const block = (text) => ['```text', text, '```'].join('\n');
 
 function tokenTable(t) {
   const rows = ['| tokens per item | A median | A mean | B median | B mean | B vs A (Σ) | 95% CI |', '|---|---:|---:|---:|---:|---:|---|'];
-  for (const [key, label] of TOKEN_METRICS) {
+  for (const [key, label, d] of [...TOKEN_METRICS, ['cost', COST_LABEL, 4]]) {
     const m = t[key];
-    rows.push(`| ${label} | ${fmt(m.A.median)} | ${fmt(m.A.mean)} | ${fmt(m.B.median)} | ${fmt(m.B.mean)} | ${pct(m.pct)} | ${ci(m.ci)} |`);
+    rows.push(`| ${label} | ${fmt(m.A.median, d)} | ${fmt(m.A.mean, d)} | ${fmt(m.B.median, d)} | ${fmt(m.B.mean, d)} | ${pct(m.pct)} | ${ci(m.ci)} |`);
   }
   return rows.join('\n');
 }
@@ -215,7 +224,8 @@ export function renderReport({ meta, report, sample }) {
   const m = meta.machine ?? {};
   out.push(`- date: ${meta.date}`, `- seed: ${meta.seed ?? sample?.seed}`, `- Claude model: ${meta.model} (judge: ${meta.judgeModel})`,
     `- Claude Code: ${meta.claudeVersion ?? 'n/a'}`, `- claude args: \`${(meta.claudeArgs ?? []).join(' ')}\``,
-    `- translator: TranslateGemma ${meta.translator}`, `- machine: CPU ${m.cpu ?? 'n/a'}, GPU ${m.gpu ?? 'n/a'}, VRAM ${m.vram ?? 'n/a'}`);
+    `- translator: TranslateGemma ${meta.translator}`, `- machine: CPU ${m.cpu ?? 'n/a'}, GPU ${m.gpu ?? 'n/a'}, VRAM ${m.vram ?? 'n/a'}`,
+    `- GPU load at start: ${'gpuLoad' in m ? gpuLoadText(m.gpuLoad) : 'not recorded'}`);
   for (const [set, d] of Object.entries(meta.datasets ?? {})) out.push(`- ${set}: \`${d.repo}\` rev \`${d.rev}\` (${d.files.join(', ')})`);
   out.push('', '### Prompts', '');
   for (const [set, p] of Object.entries(meta.prompts ?? {})) out.push(`${set}:`, '', block(p), '');
@@ -228,10 +238,12 @@ export function renderReport({ meta, report, sample }) {
 // Reads a run directory and writes its REPORT.md; resolves the file path.
 export async function writeReport(dir, sample) {
   const meta = JSON.parse(await readFile(path.join(dir, 'meta.json'), 'utf8'));
+  // Every set with results counts, even one an older meta.json leaves out.
+  const sets = SETS.filter((s) => meta.sets.includes(s) || existsSync(path.join(dir, `${s}.jsonl`)));
   const lines = {};
-  for (const set of meta.sets) lines[set] = await readLines(path.join(dir, `${set}.jsonl`));
+  for (const set of sets) lines[set] = await readLines(path.join(dir, `${set}.jsonl`));
   const judge = await readLines(path.join(dir, 'judge.jsonl'));
-  const report = computeReport({ sets: meta.sets, lines, judge, sample });
+  const report = computeReport({ sets, lines, judge, sample });
   const file = path.join(dir, 'REPORT.md');
   await writeFile(file, renderReport({ meta, report, sample }), 'utf8');
   return file;
