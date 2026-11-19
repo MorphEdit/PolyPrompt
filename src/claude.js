@@ -223,6 +223,7 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
       let streamedSession = null;
       let result = null;
       let junk = false;
+      let turnModel = null; // model of the last assistant event of this turn
       let buffer = '';
       let stderr = '';
       let settled = false;
@@ -283,6 +284,9 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
         }
         if (e.kind === 'control' && e.requestId) write(unsupportedResponseLine(e.requestId));
         else if (e.kind === 'assistant') {
+          // With --resume, modelUsage covers the whole session, so the
+          // answering model comes from this turn's assistant events.
+          if (e.model && e.model !== '<synthetic>') turnModel = e.model;
           texts.push(...e.texts);
           for (const use of e.toolUses) {
             const line = activityLine(use.name, use.input);
@@ -339,7 +343,7 @@ export function createClaudeRunner({ command = 'claude', timeoutMs = 300000, cwd
         const ok = code === 0 && result && !result.isError && typeof result.text === 'string';
         if (ok) {
           const answer = { text: texts.length ? texts.join('\n\n') : result.text, sessionId: result.sessionId ?? null };
-          const answered = answeringModel(result);
+          const answered = turnModel ?? answeringModel(result);
           return finish(null, { ...(answered ? { ...answer, model: answered } : answer), ...usageOf(result) });
         }
         // On Windows cmd.exe reports a missing command with exit code 9009.

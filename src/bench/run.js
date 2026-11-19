@@ -148,13 +148,18 @@ export async function runBench({
         }
       },
     };
+    // Each step's time is wall-clock while at least one of its calls is in
+    // flight, so pieces that translate concurrently are counted once.
+    const inFlight = { forward: 0, back: 0 };
+    const since = { forward: 0, back: 0 };
     const wrappedTranslator = {
       async translate(text, src, tgt) {
-        const start = now();
+        const step = tgt === ENGLISH ? 'forward' : 'back';
+        if (inFlight[step]++ === 0) since[step] = now();
         try {
           return await modelManager.translate(text, src, tgt);
         } finally {
-          ms[tgt === ENGLISH ? 'forward' : 'back'] += now() - start;
+          if (--inFlight[step] === 0) ms[step] += now() - since[step];
         }
       },
     };
