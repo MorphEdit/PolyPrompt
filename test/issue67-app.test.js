@@ -17,9 +17,16 @@ class El {
     this.scrollHeight = 0;
     this.scrollTop = 0;
     this.clientHeight = 0;
-    const cls = new Set();
-    this.classList = { toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)), add: (c) => cls.add(c) };
+    // className and classList share one class set, as in a browser (#69).
+    const cls = (this._cls = new Set());
+    this.classList = {
+      toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)),
+      add: (...c) => c.forEach((x) => cls.add(x)),
+      contains: (c) => cls.has(c),
+    };
   }
+  get className() { return [...this._cls].join(' '); }
+  set className(v) { this._cls.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => this._cls.add(c)); }
   append(...c) { this.children.push(...c); }
   replaceChildren(...c) { this.children = c; }
   addEventListener(e, f) { this.listeners[e] = f; }
@@ -86,10 +93,10 @@ test('direct mode: picker section, label, sizes off, no translator gate, no Engl
   byId.picker.listeners.click();
   const menu = byId['picker-menu'].children;
   assert.equal(menu[0].textContent, 'การส่ง');
-  const modes = findAll(byId['picker-menu'], (e) => e.className === 'picker-option picker-mode');
+  const modes = findAll(byId['picker-menu'], (e) => e.classList?.contains('picker-mode'));
   assert.deepEqual(modes.map((b) => b.children[0].textContent), ['ส่งตรง (แนะนำ)', 'แปลเป็นอังกฤษก่อน']);
   assert.equal(modes[1].children[1].textContent, 'ประหยัด token ราว 20–30% แต่คำตอบอาจผิดหรือภาษาแปลก');
-  const sizes = findAll(byId['picker-menu'], (e) => e.className === 'picker-option').slice(0, 3);
+  const sizes = findAll(byId['picker-menu'], (e) => e.classList?.contains('picker-option') && !e.classList.contains('picker-mode')).slice(0, 3);
   assert.equal(sizes.every((b) => b.disabled), true);
   assert.equal(sizes[0].children[1].textContent, 'ใช้เมื่อเลือกแปลเป็นอังกฤษก่อน');
 

@@ -250,7 +250,7 @@ function renderPicker() {
         disabled: false,
         onPick: () => (o.value === settings.sendMode ? closePicker() : saveSettings({ sendMode: o.value })),
       });
-      option.className = 'picker-option picker-mode';
+      option.classList.add('picker-mode');
       items.push(option);
     }
   }
