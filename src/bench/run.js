@@ -2,7 +2,7 @@
 // and B (the real runTurn pipeline), then the blind judge for `open`.
 // Everything outside (datasets, translator, `claude` command) is passed in,
 // so the tests run it with a fake `claude` and a fake translator.
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { MODEL_FLAGS, buildArgs, createClaudeRunner } from '../claude.js';
@@ -83,16 +83,33 @@ export async function runBench({
   const runner = createClaudeRunner({ command, extraArgs: EXTRA_ARGS, ...(timeoutMs ? { timeoutMs } : {}), ...(cwd ? { cwd } : {}) });
   const claudeArgs = [...buildArgs(null, model, null), ...EXTRA_ARGS];
   const metaFile = path.join(outDir, 'meta.json');
-  if (!(await exists(metaFile))) {
-    const meta = {
+  const datasetOf = (s) => ({ repo: DATASETS[s].repo, rev: DATASETS[s].rev, files: DATASETS[s].files.map((f) => f.path) });
+  let meta;
+  if (await exists(metaFile)) {
+    // A resume: the run keeps its model, judge and translator (mixing them in
+    // one set of pairs is no valid comparison); new sets join the run.
+    meta = JSON.parse(await readFile(metaFile, 'utf8'));
+    const given = { model, judgeModel, translator };
+    const flags = { model: '--model', judgeModel: '--judge-model', translator: '--translator' };
+    const changed = Object.keys(given).find((k) => meta[k] !== given[k]);
+    if (changed) {
+      return { code: 1, message: `run ${run} was started with ${flags[changed]} ${meta[changed]}; resume it with that or use a new --run` };
+    }
+    meta.sets = SETS.filter((s) => meta.sets.includes(s) || sets.includes(s));
+    for (const s of sets) {
+      meta.datasets[s] ??= datasetOf(s);
+      meta.prompts[s] ??= PROMPTS[s];
+    }
+  } else {
+    meta = {
       run, date: new Date().toISOString(), seed: SEED, sets, model, judgeModel, translator, claudeArgs, claudeVersion, machine,
-      datasets: Object.fromEntries(sets.map((s) => [s, { repo: DATASETS[s].repo, rev: DATASETS[s].rev, files: DATASETS[s].files.map((f) => f.path) }])),
+      datasets: Object.fromEntries(sets.map((s) => [s, datasetOf(s)])),
       prompts: Object.fromEntries(sets.map((s) => [s, PROMPTS[s]])),
       judgePrompt: JUDGE_PROMPT,
     };
-    await mkdir(outDir, { recursive: true });
-    await writeFile(metaFile, JSON.stringify(meta, null, 2) + '\n', 'utf8');
   }
+  await mkdir(outDir, { recursive: true });
+  await writeFile(metaFile, JSON.stringify(meta, null, 2) + '\n', 'utf8');
 
   const append = createAppender();
   let quota = false;

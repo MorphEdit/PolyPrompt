@@ -104,6 +104,7 @@ npm run bench:report -- --run <id>
   WangchanThaiInstruct), checked by SHA-256 and cached in `.cache/bench/`. The
   frozen, seeded sample is `bench/sample.json`.
 - Rerunning with the same `--run` resumes; `--retry-failed` reruns only the
-  failed items. When Claude's usage quota runs out the run stops (exit code 2)
+  failed items. A resume may add other `--sets` to the run, but must keep its
+  `--model`, `--judge-model` and `--translator` (use a new `--run` to change them). When Claude's usage quota runs out the run stops (exit code 2)
   and can be resumed later with the same `--run`.
 - It uses real Claude calls and your quota; it is not part of `npm test`.
