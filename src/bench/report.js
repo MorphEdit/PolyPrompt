@@ -1,11 +1,12 @@
 // REPORT.md of a benchmark run, from meta.json and the result lines. The
 // numbers come from computeReport (tested); renderReport only formats them.
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isErrorLine, judgeKey, lastBy, pairKey, readLines } from './results.js';
 import { gpuLoadText } from './gpu.js';
 import { judgeOutcome } from './judge.js';
-import { SCORED } from './run.js';
+import { SCORED, SETS } from './run.js';
 import { bootstrapCI, discordant, mcnemar, mean, median, pairedPct, wilson } from './stats.js';
 
 const n0 = (v) => (typeof v === 'number' ? v : 0);
@@ -237,10 +238,12 @@ export function renderReport({ meta, report, sample }) {
 // Reads a run directory and writes its REPORT.md; resolves the file path.
 export async function writeReport(dir, sample) {
   const meta = JSON.parse(await readFile(path.join(dir, 'meta.json'), 'utf8'));
+  // Every set with results counts, even one an older meta.json leaves out.
+  const sets = SETS.filter((s) => meta.sets.includes(s) || existsSync(path.join(dir, `${s}.jsonl`)));
   const lines = {};
-  for (const set of meta.sets) lines[set] = await readLines(path.join(dir, `${set}.jsonl`));
+  for (const set of sets) lines[set] = await readLines(path.join(dir, `${set}.jsonl`));
   const judge = await readLines(path.join(dir, 'judge.jsonl'));
-  const report = computeReport({ sets: meta.sets, lines, judge, sample });
+  const report = computeReport({ sets, lines, judge, sample });
   const file = path.join(dir, 'REPORT.md');
   await writeFile(file, renderReport({ meta, report, sample }), 'utf8');
   return file;
