@@ -129,8 +129,11 @@ npm run bench:report -- --run <id>
 Full report: [`bench/results/full-2026-11-18/REPORT.md`](bench/results/full-2026-11-18/REPORT.md).
 Every request and answer is in the `.jsonl` files next to it.
 
-**In short: PolyPrompt uses fewer tokens, but its answers are clearly worse.**
-For Thai with Opus 5.5 and the 4B translator, sending Thai directly is the better choice today.
+A is direct mode (the default); B is translate mode.
+
+**In short: translating first uses fewer tokens, but the answers are clearly worse.**
+For Thai with Opus 5.5 and the 4B translator, sending Thai directly is the better choice, which is
+why direct mode is the default.
 
 | set (items) | output tokens, B vs A | cost, B vs A | A correct | B correct |
 |---|---:|---:|---:|---:|
@@ -141,8 +144,9 @@ For Thai with Opus 5.5 and the 4B translator, sending Thai directly is the bette
 
 - **Tokens.** B saves 11–40% of output tokens (95% CIs in the report), most on long
   open-ended answers. Counting Claude Code's cached system prompt, the full total
-  saving is 6–16%. Cost here is the `total_cost_usd` Claude Code reports, which
-  weights cache reads and output as billed.
+  saving is 6–16%. Cost is the report's "API-equivalent cost" row (the
+  `total_cost_usd` Claude Code reports, which weights cache reads and output as
+  billed): −23% overall, 95% CI [−27%, −19%].
 - **Accuracy drops.** Both drops are significant (McNemar p < 0.0001). B's English
   answer scores the same as its Thai answer, so the errors come from translating
   the question to English, not the answer back. For example, "โหล" (dozen) became
@@ -155,5 +159,8 @@ For Thai with Opus 5.5 and the 4B translator, sending Thai directly is the bette
 - 22 of 550 B items fell back (sent as typed, or answer shown in English). They are
   kept and counted, as they are part of the real behaviour.
 - Limits: the judge is Claude itself; only Thai and one Claude model were tested;
-  `open` is only 100 items. The report's "translation share" column is wrong
-  (over 100%) and will be fixed.
+  `open` is only 100 items. The report's "translation share" column is over 100%
+  for this run: it was measured before the timing fix in #61, so ignore it here.
+- **12B translator.** An informal check (2 items, not part of the report) showed
+  TranslateGemma 12B translating answers back noticeably better than 4B, but on this
+  8 GB GPU it took 3–6 minutes per long answer, so it was not benchmarked.

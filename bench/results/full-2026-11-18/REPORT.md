@@ -14,6 +14,7 @@ A = Thai sent to Claude as typed. B = PolyPrompt (Thai → English → Claude �
 | output | 217.5 | 232.8 | 140.0 | 206.7 | -11.2% | [-18.5%, -3.2%] |
 | message tokens only (uncached input + output) | 219.5 | 234.8 | 142.0 | 208.7 | -11.1% | [-18.4%, -3.2%] |
 | full total (incl. cached system prompt) | 2730.0 | 2749.6 | 2523.5 | 2583.5 | -6.0% | [-6.7%, -5.3%] |
+| API-equivalent cost (USD) | 0.0136 | 0.0138 | 0.0110 | 0.0122 | -11.8% | [-14.3%, -9.1%] |
 
 ### belebele (200 pairs)
 
@@ -25,6 +26,7 @@ A = Thai sent to Claude as typed. B = PolyPrompt (Thai → English → Claude �
 | output | 269.0 | 311.6 | 229.0 | 274.6 | -11.9% | [-19.2%, -4.1%] |
 | message tokens only (uncached input + output) | 271.0 | 313.6 | 231.0 | 276.6 | -11.8% | [-19.1%, -4.1%] |
 | full total (incl. cached system prompt) | 3142.5 | 3160.1 | 2743.0 | 2786.5 | -11.8% | [-12.7%, -11.0%] |
+| API-equivalent cost (USD) | 0.0174 | 0.0181 | 0.0138 | 0.0146 | -19.0% | [-21.6%, -16.3%] |
 
 ### open (100 pairs)
 
@@ -36,6 +38,7 @@ A = Thai sent to Claude as typed. B = PolyPrompt (Thai → English → Claude �
 | output | 2774.0 | 3013.3 | 1574.0 | 1799.7 | -40.3% | [-44.7%, -35.4%] |
 | message tokens only (uncached input + output) | 2776.0 | 3016.5 | 1577.0 | 1803.0 | -40.2% | [-44.7%, -35.4%] |
 | full total (incl. cached system prompt) | 5785.0 | 9529.2 | 4242.5 | 8023.5 | -15.8% | [-28.1%, -3.5%] |
+| API-equivalent cost (USD) | 0.0696 | 0.0879 | 0.0447 | 0.0621 | -29.4% | [-36.0%, -22.2%] |
 
 ### all sets (550 pairs)
 
@@ -47,6 +50,7 @@ A = Thai sent to Claude as typed. B = PolyPrompt (Thai → English → Claude �
 | output | 267.0 | 767.0 | 228.5 | 521.0 | -32.1% | [-36.0%, -27.6%] |
 | message tokens only (uncached input + output) | 269.0 | 769.2 | 230.5 | 523.2 | -32.0% | [-35.9%, -27.6%] |
 | full total (incl. cached system prompt) | 2957.0 | 4131.5 | 2690.5 | 3646.4 | -11.7% | [-17.3%, -6.7%] |
+| API-equivalent cost (USD) | 0.0159 | 0.0288 | 0.0134 | 0.0222 | -23.2% | [-27.2%, -19.0%] |
 
 ## Quality
 
@@ -117,6 +121,7 @@ Judge on `open` (100 pairs, both orders must agree for a win): A wins 99, B wins
 - claude args: `-p --input-format stream-json --output-format stream-json --verbose --permission-prompt-tool stdio --tools WebSearch,WebFetch --allowedTools WebSearch,WebFetch --strict-mcp-config --setting-sources user --system-prompt You are Claude, a helpful general assistant in a chat. You can search the web and fetch web pages. You have no access to files, folders, commands or the computer you run on. Answer from your own knowledge, the web and what the user writes in the chat. --model claude-opus-5-5 --no-session-persistence`
 - translator: TranslateGemma 4b
 - machine: CPU AMD Ryzen 5 5600X 6-Core Processor             , GPU NVIDIA GeForce RTX 4060, VRAM 8188 MiB
+- GPU load at start: not recorded
 - mgsm: `juletxara/mgsm` rev `b2f13d426afe3be8d69a7e739b36724db8b66bbc` (th/test-00000-of-00001.parquet)
 - belebele: `facebook/belebele` rev `7899cdfa4e1e0d733fd77c848e2c273cb1d32be2` (data/tha_Thai.jsonl)
 - open: `airesearch/WangchanThaiInstruct` rev `9099b833a1b6b9d471d7e6f4abb22bf88f318bd4` (data/test-00000-of-00001.parquet)
