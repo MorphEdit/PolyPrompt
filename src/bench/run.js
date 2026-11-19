@@ -249,7 +249,11 @@ export async function runBench({
       const a = pairs.get(`${id}\u0000A`)?.value;
       const b = pairs.get(`${id}\u0000B`)?.value;
       if (!a || !b || isErrorLine(a) || isErrorLine(b)) continue;
-      for (const order of [1, 2]) if (due(last, `${id}\u0000${order}`)) work.push({ id, order, a, b });
+      // An order with no line yet is always due: under --retry-failed its A or B may only just have been repaired (#63).
+      for (const order of [1, 2]) {
+        const key = `${id}\u0000${order}`;
+        if (!last.has(key) || due(last, key)) work.push({ id, order, a, b });
+      }
     }
     log(`judge: ${work.length} call(s) to run`);
     await pool(work, concurrency, stopped, async ({ id, order, a, b }) => {
