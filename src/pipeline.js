@@ -130,12 +130,21 @@ function errorOf(err) {
   return { kind: 'failed', message: TURN_FAILED };
 }
 
+// The send mode of a turn when the caller passes none: the setting, or
+// 'translate' when no settings store is injected (tests, older callers).
+export function sendModeOf(deps) {
+  return deps.settings ? deps.settings.get().sendMode ?? 'direct' : 'translate';
+}
+
 // Runs steps 3-7 for the chat's last (user) message. The caller has already
 // set the chat's pending entry; it is always cleared here. Never rejects.
+// mode: 'direct' (sent as typed, nothing translated) or 'translate'; the
+// routes pass the mode they read, so a later switch never changes this turn.
 // deps: { chatStore, modelManager, detect, runner, pending, settings?, maxChars? }
-export async function runTurn(deps, chat, message) {
+export async function runTurn(deps, chat, message, mode = sendModeOf(deps)) {
   const { chatStore, modelManager, detect, runner, pending, settings, maxChars = MAX_CHARS } = deps;
   const id = chat.id;
+  const direct = mode === 'direct';
   // Restored on failure so a failed final save leaves no answer and the old
   // session, unless the stream already gave a new one: that session holds
   // what Claude did, so a retry resumes it.
@@ -161,16 +170,17 @@ export async function runTurn(deps, chat, message) {
   });
   pending.begin(id, turn);
   try {
-    pending.set(id, 'translating');
+    pending.set(id, direct ? 'thinking' : 'translating');
     // Every call goes through the manager's queue, so a size switch during
     // this turn is picked up by the calls that run after it.
     const translator = { translate: (text, src, tgt) => modelManager.translate(text, src, tgt) };
-    const detected = detect(message.original);
+    // Direct: no detection, Claude reads and answers the text as typed.
+    const detected = direct ? { kind: 'direct' } : detect(message.original);
     const supported = detected.kind !== 'unsupported';
     let lang = null;
     if (detected.kind === 'ok') lang = detected.lang;
-    else if (detected.kind !== 'unsupported') lang = chat.lang ?? ENGLISH;
-    const foreign = supported && lang !== ENGLISH;
+    else if (!direct && detected.kind !== 'unsupported') lang = chat.lang ?? ENGLISH;
+    const foreign = !direct && supported && lang !== ENGLISH;
 
     const notes = [];
     let english = message.original;
@@ -184,7 +194,8 @@ export async function runTurn(deps, chat, message) {
     }
 
     message.lang = lang;
-    message.english = english;
+    message.english = direct ? null : english;
+    if (direct) message.mode = 'direct';
 
     pending.set(id, 'thinking');
     turn.running = true;
@@ -228,14 +239,17 @@ export async function runTurn(deps, chat, message) {
 
     delete message.error;
     if (detected.kind === 'ok') chat.lang = lang;
-    const reply = {
-      id: newId(),
-      role: 'assistant',
-      original: shown,
-      english: answer.text,
-      lang: supported ? lang : ENGLISH,
-      createdAt: new Date().toISOString(),
-    };
+    // A direct reply keeps no English text: the UI shows no original for it.
+    const reply = direct
+      ? { id: newId(), role: 'assistant', original: shown, mode: 'direct', lang: null, createdAt: new Date().toISOString() }
+      : {
+        id: newId(),
+        role: 'assistant',
+        original: shown,
+        english: answer.text,
+        lang: supported ? lang : ENGLISH,
+        createdAt: new Date().toISOString(),
+      };
     // Which model answered, and which one was asked for (see answeredByLabel).
     if (answer.model) {
       reply.model = answer.model;

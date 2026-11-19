@@ -187,7 +187,7 @@ export async function runBench({
       pending: createPending(), settings: { get: () => ({ claudeModel: model }) },
     };
     const start = now();
-    await runTurn(deps, chat, message);
+    await runTurn(deps, chat, message, 'translate'); // condition B is the translate pipeline
     const total = now() - start;
     if (quotaHit) return null;
 

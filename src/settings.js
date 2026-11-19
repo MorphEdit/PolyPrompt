@@ -1,4 +1,4 @@
-// App-wide settings (translator size, Claude model) in one JSON file.
+// App-wide settings (send mode, translator size, Claude model) in one JSON file.
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -7,9 +7,11 @@ import { DEFAULT_SIZE, isSize } from './translator.js';
 import { CLAUDE_OPTIONS, LEGACY_CLAUDE_MODELS } from '../public/models.js';
 
 export const CLAUDE_MODELS = CLAUDE_OPTIONS.map((o) => o.value);
-export const DEFAULTS = { translatorSize: DEFAULT_SIZE, claudeModel: 'default' };
+export const SEND_MODES = ['direct', 'translate'];
+export const DEFAULTS = { translatorSize: DEFAULT_SIZE, claudeModel: 'default', sendMode: 'direct' };
 
 export const isClaudeModel = (v) => CLAUDE_MODELS.includes(v);
+export const isSendMode = (v) => SEND_MODES.includes(v);
 
 // Unknown or missing values fall back to the defaults; old aliases
 // (opus, sonnet, haiku) become their full model IDs.
@@ -21,6 +23,7 @@ function clean(data) {
   return {
     translatorSize: isSize(obj.translatorSize) ? obj.translatorSize : DEFAULTS.translatorSize,
     claudeModel: isClaudeModel(claudeModel) ? claudeModel : DEFAULTS.claudeModel,
+    sendMode: isSendMode(obj.sendMode) ? obj.sendMode : DEFAULTS.sendMode,
   };
 }
 
@@ -51,7 +54,7 @@ export async function createSettingsStore({ file }) {
 
   async function update(patch) {
     const next = clean({ ...current, ...patch });
-    if (next.translatorSize === current.translatorSize && next.claudeModel === current.claudeModel) return { ...current };
+    if (Object.keys(next).every((k) => next[k] === current[k])) return { ...current };
     if (next.claudeModel !== current.claudeModel) previousClaudeModel = current.claudeModel;
     current = next;
     const snapshot = { ...current };

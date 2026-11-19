@@ -229,7 +229,12 @@ export function createSessionViewer({ projectsDir = defaultProjectsDir(), cacheD
         }
         return { role: m.role, english: m.english, original, activity: m.activity };
       });
-      if (done < total) startJob(key, parsed.messages, cache);
+      if (done < total) {
+        // Opening a session that needs translating loads the translator (a
+        // no-op once started); the next poll translates once it is ready.
+        if (!modelManager.isReady()) modelManager.start?.();
+        startJob(key, parsed.messages, cache);
+      }
       const notes = [];
       if (parsed.unknown) notes.push(UNKNOWN_NOTE);
       if (anyFailed) notes.push(FAILED_NOTE);
