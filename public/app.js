@@ -4,6 +4,7 @@ import {
   pickerLabel, pickerDisabled, answeredByLabel, sizeOptionsDisabled, sizePickAction, confirmDownloadText, sizeOptionNote,
   STOPPED_NOTE, TRUNCATED_NOTE, ONCE_ONLY_HINT, cardDecisions, canStop, currentFolder, canPickFolder, sendBody,
   sessionProgress, shortDate, nextTheme, themeToggleLabel, themeToggleIcon, loadTheme, saveTheme,
+  modelBannerShown, SEND_MODE_OPTIONS, SIZES_DIRECT_HINT, showsEnglish,
 } from './logic.js';
 
 const POLL_MS = 1000;
@@ -99,15 +100,21 @@ function showError(err) {
 const isPending = () => state.busy || state.chat?.pendingStep != null;
 
 function updateComposer() {
+  const sendMode = state.settings?.sendMode;
   els.send.disabled = !canSend({
     text: els.input.value,
     pending: isPending(),
     modelState: state.model.state,
     lastMessageHasError: lastMessageHasError(state.chat),
+    sendMode,
   });
   // The model state can change without a re-render of the chat (status poll),
   // so the retry button's state is kept in sync here too.
-  if (retryButton) retryButton.disabled = !retryEnabled({ pending: isPending(), modelState: state.model.state });
+  if (retryButton) retryButton.disabled = !retryEnabled({ pending: isPending(), modelState: state.model.state, sendMode });
+  // Direct mode needs no translator: its banner shows only for an old
+  // session still waiting for its translation.
+  const sessionWaiting = !!state.session && state.session.done < state.session.total;
+  els.modelBanner.hidden = state.model.state === 'ready' || !modelBannerShown({ sendMode, sessionWaiting });
   renderPicker();
   els.stop.hidden = !canStop(state.chat);
   els.stop.disabled = state.answering;
@@ -189,7 +196,7 @@ async function loadStatus() {
 async function loadSettings() {
   try {
     state.settings = await api('GET', '/api/settings');
-    renderPicker();
+    updateComposer();
   } catch (err) {
     showError(err);
   }
@@ -226,15 +233,32 @@ function renderPicker() {
   els.picker.textContent = settings ? pickerLabel(settings) : 'โมเดล';
   if (disabled) closePicker();
   if (!settings) return;
+  const direct = settings.sendMode === 'direct';
   const sizesOff = sizeOptionsDisabled({
-    pending: isPending(), modelState: state.model.state, switchState: state.switch?.state,
+    pending: isPending(), modelState: state.model.state, switchState: state.switch?.state, sendMode: settings.sendMode,
   });
   const loaded = state.model.state === 'ready' ? state.model.size : settings.translatorSize;
-  const items = [sectionTitle('ตัวแปลภาษา')];
+  const items = [];
+  // An older server sends no sendMode: no send-mode section then.
+  if (settings.sendMode) {
+    items.push(sectionTitle('การส่ง'));
+    for (const o of SEND_MODE_OPTIONS) {
+      const option = pickerOption({
+        name: o.label,
+        hint: o.hint,
+        selected: o.value === settings.sendMode,
+        disabled: false,
+        onPick: () => (o.value === settings.sendMode ? closePicker() : saveSettings({ sendMode: o.value })),
+      });
+      option.className = 'picker-option picker-mode';
+      items.push(option);
+    }
+  }
+  items.push(sectionTitle('ตัวแปลภาษา'));
   for (const o of SIZE_OPTIONS) {
     items.push(pickerOption({
       name: o.label,
-      hint: o.hint,
+      hint: direct ? SIZES_DIRECT_HINT : o.hint,
       note: sizeOptionNote(o.value, settings.downloadedSizes),
       selected: o.value === loaded,
       disabled: sizesOff,
@@ -283,8 +307,9 @@ async function saveSettings(patch) {
       ? 'กำลังเปลี่ยนโมเดลแปลภาษาอยู่ กรุณารอสักครู่'
       : err.message;
   }
-  renderPicker();
-  if (patch.translatorSize) loadStatus();
+  updateComposer();
+  // Translate mode starts the translator load: show its progress.
+  if (patch.translatorSize || patch.sendMode) loadStatus();
 }
 
 function pickSize(size) {
@@ -389,7 +414,7 @@ function renderMessage(m, index, messages) {
   wrap.append(bubble);
   if (m.role === 'user') {
     bubble.textContent = m.original;
-    if (m.english && m.english !== m.original) {
+    if (showsEnglish(m)) {
       const body = document.createElement('div');
       body.textContent = m.english;
       wrap.append(translationBlock('ดูคำแปลภาษาอังกฤษ', body));
@@ -414,7 +439,7 @@ function renderMessage(m, index, messages) {
     // renderMarkdown escapes all HTML in Claude's (untrusted) text.
     bubble.innerHTML = renderMarkdown(m.original);
     bubble.hidden = !m.original;
-    if (m.english && m.english !== m.original) {
+    if (showsEnglish(m)) {
       const body = document.createElement('div');
       body.innerHTML = renderMarkdown(m.english);
       wrap.append(translationBlock('ดูต้นฉบับภาษาอังกฤษ', body));

@@ -11,10 +11,14 @@ export function keyAction({ key, shiftKey = false, isComposing = false } = {}) {
   return shiftKey ? 'newline' : 'send';
 }
 
-export function canSend({ text, pending, modelState, lastMessageHasError }) {
+// Direct mode needs no translator. A missing sendMode (an older server)
+// means translate mode, as before.
+const needsTranslator = (sendMode) => sendMode !== 'direct';
+
+export function canSend({ text, pending, modelState, lastMessageHasError, sendMode }) {
   if (typeof text !== 'string' || text.trim() === '') return false;
   if (pending) return false;
-  if (modelState !== 'ready') return false;
+  if (needsTranslator(sendMode) && modelState !== 'ready') return false;
   if (lastMessageHasError) return false;
   return true;
 }
@@ -59,8 +63,14 @@ export function canRetry(messages, index) {
 }
 
 // Whether the "ส่งใหม่" button of a retryable message can be clicked now.
-export function retryEnabled({ pending, modelState }) {
-  return !pending && modelState === 'ready';
+export function retryEnabled({ pending, modelState, sendMode }) {
+  return !pending && (!needsTranslator(sendMode) || modelState === 'ready');
+}
+
+// Whether the translator's loading/error banners show: in translate mode, or
+// while an open old Claude Code session waits for its translation.
+export function modelBannerShown({ sendMode, sessionWaiting = false }) {
+  return needsTranslator(sendMode) || !!sessionWaiting;
 }
 
 export function lastMessageHasError(chat) {
@@ -184,6 +194,14 @@ export const SIZE_OPTIONS = [
   { value: '27b', label: '27B', bytes: 16_546_704_480, hint: 'แปลดีที่สุด ช้ามาก ต้องใช้ RAM มาก' },
 ];
 
+export const SEND_MODE_OPTIONS = [
+  { value: 'direct', label: 'ส่งตรง (แนะนำ)', hint: 'ส่งข้อความตามที่พิมพ์ Claude ตอบเป็นภาษาเดียวกัน แม่นที่สุด' },
+  { value: 'translate', label: 'แปลเป็นอังกฤษก่อน', hint: 'ประหยัด token ราว 20–30% แต่คำตอบอาจผิดหรือภาษาแปลก' },
+];
+
+// Hint of the disabled size section in direct mode.
+export const SIZES_DIRECT_HINT = 'ใช้เมื่อเลือกแปลเป็นอังกฤษก่อน';
+
 const optionOf = (options, value) => options.find((o) => o.value === value) ?? options[0];
 
 // Small text under an answer naming the model that wrote it, when that is
@@ -198,9 +216,10 @@ export function formatGB(bytes) {
   return `${(Math.round(bytes / 1e8) / 10).toFixed(1)} GB`;
 }
 
-// Text of the picker button, e.g. "แปล 4B · Claude ค่าเริ่มต้น".
-export function pickerLabel({ translatorSize, claudeModel } = {}) {
-  return `แปล ${optionOf(SIZE_OPTIONS, translatorSize).label} · Claude ${optionOf(CLAUDE_OPTIONS, claudeModel).label}`;
+// Text of the picker button, e.g. "ส่งตรง · Claude ค่าเริ่มต้น" or "แปล 4B · Claude ค่าเริ่มต้น".
+export function pickerLabel({ translatorSize, claudeModel, sendMode } = {}) {
+  const send = needsTranslator(sendMode) ? `แปล ${optionOf(SIZE_OPTIONS, translatorSize).label}` : 'ส่งตรง';
+  return `${send} · Claude ${optionOf(CLAUDE_OPTIONS, claudeModel).label}`;
 }
 
 // The whole picker waits while the open chat's reply is pending.
@@ -210,8 +229,17 @@ export function pickerDisabled({ pending }) {
 
 // Size picks are refused while a size download or any model load runs; they
 // stay available in the error state.
-export function sizeOptionsDisabled({ pending, modelState, switchState }) {
+// In direct mode the sizes are not used, so they are disabled too.
+export function sizeOptionsDisabled({ pending, modelState, switchState, sendMode }) {
+  if (sendMode === 'direct') return true;
   return !!pending || modelState === 'loading' || switchState === 'downloading';
+}
+
+// Whether a message shows its English text ("ดูต้นฉบับภาษาอังกฤษ" /
+// "ดูคำแปลภาษาอังกฤษ"): never for a direct-mode message. Messages from before
+// direct mode have no `mode` and are translate-mode messages.
+export function showsEnglish(m) {
+  return m?.mode !== 'direct' && !!m?.english && m.english !== m.original;
 }
 
 // What picking `size` should do: 'none' (already loaded), 'confirm' (needs a

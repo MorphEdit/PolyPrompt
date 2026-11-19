@@ -18,6 +18,8 @@ async function setup(t, { downloaded = ['4b', '12b'] } = {}) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const chatStore = createChatStore({ dir: path.join(dir, 'chats') });
   const settings = await createSettingsStore({ file: path.join(dir, 'settings.json') });
+  // These tests cover the translate pipeline; direct is the default since #67.
+  await settings.update({ sendMode: 'translate' });
   const calls = [];
   const loads = [];
   const gates = [];

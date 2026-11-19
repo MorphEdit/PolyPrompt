@@ -18,7 +18,7 @@ async function tempDir(t) {
 test('a missing settings file means the defaults and is not written', async (t) => {
   const file = path.join(await tempDir(t), 'settings.json');
   const s = await createSettingsStore({ file });
-  assert.deepEqual(s.get(), { translatorSize: '4b', claudeModel: 'default' });
+  assert.deepEqual(s.get(), { translatorSize: '4b', claudeModel: 'default', sendMode: 'direct' });
   assert.equal(existsSync(file), false);
 });
 
@@ -27,17 +27,17 @@ test('updates persist and are read back', async (t) => {
   const s = await createSettingsStore({ file });
   await s.update({ claudeModel: 'claude-haiku-5-5' });
   await s.update({ translatorSize: '12b' });
-  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { translatorSize: '12b', claudeModel: 'claude-haiku-5-5' });
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { translatorSize: '12b', claudeModel: 'claude-haiku-5-5', sendMode: 'direct' });
   const again = await createSettingsStore({ file });
-  assert.deepEqual(again.get(), { translatorSize: '12b', claudeModel: 'claude-haiku-5-5' });
+  assert.deepEqual(again.get(), { translatorSize: '12b', claudeModel: 'claude-haiku-5-5', sendMode: 'direct' });
 });
 
 test('unknown values in the file fall back to the defaults', async (t) => {
   const file = path.join(await tempDir(t), 'settings.json');
   await writeFile(file, JSON.stringify({ translatorSize: '70b', claudeModel: 'gpt' }));
-  assert.deepEqual((await createSettingsStore({ file })).get(), { translatorSize: '4b', claudeModel: 'default' });
+  assert.deepEqual((await createSettingsStore({ file })).get(), { translatorSize: '4b', claudeModel: 'default', sendMode: 'direct' });
   await writeFile(file, 'not json');
-  assert.deepEqual((await createSettingsStore({ file })).get(), { translatorSize: '4b', claudeModel: 'default' });
+  assert.deepEqual((await createSettingsStore({ file })).get(), { translatorSize: '4b', claudeModel: 'default', sendMode: 'direct' });
 });
 
 // App with a fake model manager setup and a real settings file in a temp dir.
@@ -79,7 +79,7 @@ test('GET /api/settings returns both choices and the downloaded sizes', async (t
   const s = await setup(t);
   const r = await s.get();
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'default', downloadedSizes: ['4b'] });
+  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'default', sendMode: 'direct', downloadedSizes: ['4b'] });
 });
 
 test('PUT /api/settings rejects bad bodies with 400 and applies nothing', async (t) => {
@@ -100,7 +100,7 @@ test('PUT claudeModel saves at once and survives a restart', async (t) => {
   const s = await setup(t);
   const r = await s.put({ claudeModel: 'claude-opus-5-5' });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'claude-opus-5-5', downloadedSizes: ['4b'] });
+  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'claude-opus-5-5', sendMode: 'direct', downloadedSizes: ['4b'] });
   assert.equal((await s.get()).json.claudeModel, 'claude-opus-5-5');
   assert.equal((await createSettingsStore({ file: s.file })).get().claudeModel, 'claude-opus-5-5');
 });
@@ -111,7 +111,7 @@ test('PUT translatorSize is saved only after the new size loads', async (t) => {
   await tick();
   let r = await s.put({ translatorSize: '12b', claudeModel: 'claude-sonnet-5-5' });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'claude-sonnet-5-5', downloadedSizes: ['4b'] });
+  assert.deepEqual(r.json, { translatorSize: '4b', claudeModel: 'claude-sonnet-5-5', sendMode: 'direct', downloadedSizes: ['4b'] });
   r = await s.get('/api/status');
   assert.deepEqual(r.json, {
     model: { state: 'ready', progress: 1, error: null, size: '4b' },
@@ -128,7 +128,7 @@ test('PUT translatorSize is saved only after the new size loads', async (t) => {
   await tick();
   await tick();
   r = await s.get();
-  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'claude-sonnet-5-5', downloadedSizes: ['4b', '12b'] });
+  assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'claude-sonnet-5-5', sendMode: 'direct', downloadedSizes: ['4b', '12b'] });
   for (let i = 0; i < 100 && (await createSettingsStore({ file: s.file })).get().translatorSize !== '12b'; i++) {
     await new Promise((res) => setTimeout(res, 20));
   }
