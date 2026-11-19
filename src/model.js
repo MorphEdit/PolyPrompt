@@ -171,7 +171,9 @@ export function createModelManager({
     );
   }
 
-  const busy = () => state === 'loading' || switchInfo?.state === 'downloading';
+  // Never busy before the first start: no send mode loads the translator,
+  // so a size pick may come first (see selectSize).
+  const busy = () => started && (state === 'loading' || switchInfo?.state === 'downloading');
 
   return {
     start() {
@@ -192,6 +194,8 @@ export function createModelManager({
     isReady() {
       return state === 'ready';
     },
+    // False until the first load starts (start, or a size pick).
+    isStarted: () => started,
     // True while a size download or any load runs: size picks are refused.
     isBusy: busy,
     savedSize: () => savedSize,
@@ -212,6 +216,12 @@ export function createModelManager({
     // 'unchanged' (already loaded) or 'started'. The returned `done` promise
     // settles when the change has ended (for tests).
     selectSize(target) {
+      // Not loaded yet: the pick starts the first load, of that size (the
+      // loader downloads a missing file first).
+      if (!started) {
+        started = true;
+        return { result: 'started', done: begin(target) };
+      }
       if (busy()) return { result: 'busy', done: Promise.resolve() };
       if (target === size && state === 'ready') {
         switchInfo = null;

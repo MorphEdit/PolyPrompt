@@ -418,6 +418,12 @@ details.translation .translation-body {
   color: var(--muted);
 }
 
+.picker-section-hint {
+  padding: 0 10px 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .composer .picker-option {
   display: block;
   width: 100%;

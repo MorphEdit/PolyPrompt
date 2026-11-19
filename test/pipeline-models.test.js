@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createModelManager } from '../src/model.js';
-import { createPending, runTurn, TRANSLATE_FAILED } from '../src/pipeline.js';
+import { createPending, LOCAL_TRANSLATE, runTurn, TRANSLATE_FAILED } from '../src/pipeline.js';
 import { createSettingsStore } from '../src/settings.js';
 import { createChatStore } from '../src/store.js';
 import { deferred, tick } from './helpers.js';
@@ -18,7 +18,8 @@ async function setup(t, { downloaded = ['4b', '12b'] } = {}) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const chatStore = createChatStore({ dir: path.join(dir, 'chats') });
   const settings = await createSettingsStore({ file: path.join(dir, 'settings.json') });
-  // These tests cover the translate pipeline; direct is the default since #67.
+  // These tests cover the local translator pipeline: since #71 the benchmark's
+  // LOCAL_TRANSLATE mode. Direct is the default since #67.
   await settings.update({ sendMode: 'translate' });
   const calls = [];
   const loads = [];
@@ -54,7 +55,7 @@ async function setup(t, { downloaded = ['4b', '12b'] } = {}) {
     chat ??= await chatStore.create(text);
     const message = { id: `m${chat.messages.length}`, role: 'user', original: text, english: null, lang: null, createdAt: 'x' };
     chat.messages.push(message);
-    await runTurn(deps, chat, message);
+    await runTurn(deps, chat, message, LOCAL_TRANSLATE);
     return chat;
   }
   return { deps, chatStore, settings, modelManager, loads, calls, gates, runs, runner, turn, dir };

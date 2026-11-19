@@ -1,5 +1,6 @@
 // #67: runs public/app.js against a tiny fake DOM (as app.test.js does) in
-// direct mode with the translator never loaded.
+// direct mode with the translator never loaded. #71: translate mode needs it
+// no more either, and the sizes work in both modes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -43,7 +44,7 @@ const findAll = (el, pred, out = []) => {
 };
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test('direct mode: picker section, label, sizes off, no translator gate, no English original on direct replies', async () => {
+test('direct mode: picker section, label, sizes on, no translator gate, no English original on direct replies', async () => {
   let model = { state: 'loading', progress: 0, error: null, size: '4b' };
   let settings = { translatorSize: '4b', claudeModel: 'default', sendMode: 'direct', downloadedSizes: ['4b'] };
   const puts = [];
@@ -61,7 +62,8 @@ test('direct mode: picker section, label, sizes off, no translator gate, no Engl
   globalThis.confirm = () => true;
   globalThis.fetch = async (url, opts = {}) => {
     const json = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
-    if (url === '/api/status') return json({ model, switch: null });
+    // idle: the translator was never started.
+    if (url === '/api/status') return json({ model, switch: null, idle: true });
     if (url === '/api/settings' && opts.method === 'PUT') {
       const patch = JSON.parse(opts.body);
       puts.push(patch);
@@ -89,25 +91,30 @@ test('direct mode: picker section, label, sizes off, no translator gate, no Engl
   const summaries = findAll(byId.messages, (e) => e.tagName === 'summary').map((e) => e.textContent);
   assert.deepEqual(summaries, ['ดูคำแปลภาษาอังกฤษ', 'ดูต้นฉบับภาษาอังกฤษ']);
 
-  // The "การส่ง" section comes first, direct selected; the sizes are disabled.
+  // The "การส่ง" section comes first, direct selected; the sizes are enabled (#71).
   byId.picker.listeners.click();
   const menu = byId['picker-menu'].children;
   assert.equal(menu[0].textContent, 'การส่ง');
   const modes = findAll(byId['picker-menu'], (e) => e.classList?.contains('picker-mode'));
-  assert.deepEqual(modes.map((b) => b.children[0].textContent), ['ส่งตรง (แนะนำ)', 'แปลเป็นอังกฤษก่อน']);
-  assert.equal(modes[1].children[1].textContent, 'ประหยัด token ราว 20–30% แต่คำตอบอาจผิดหรือภาษาแปลก');
-  const sizes = findAll(byId['picker-menu'], (e) => e.classList?.contains('picker-option') && !e.classList.contains('picker-mode')).slice(0, 3);
-  assert.equal(sizes.every((b) => b.disabled), true);
-  assert.equal(sizes[0].children[1].textContent, 'ใช้เมื่อเลือกแปลเป็นอังกฤษก่อน');
+  assert.deepEqual(modes.map((b) => b.children[0].textContent), ['ส่งตรง (แนะนำ)', 'ตอบเป็นอังกฤษแล้วแปลกลับ']);
+  assert.equal(modes[1].children[1].textContent, 'ประหยัดราว 20% ช้าลงราว 10 วินาที ภาษาอาจดูเป็นงานแปล');
+  const sizesOf = () => findAll(byId['picker-menu'], (e) => e.classList?.contains('picker-option') && !e.classList.contains('picker-mode')).slice(0, 3);
+  const sectionHint = () => find(byId['picker-menu'], (e) => e.className === 'picker-section-hint')?.textContent;
+  assert.equal(sizesOf().some((b) => b.disabled), false, 'direct: sizes enabled');
+  assert.equal(sectionHint(), 'ใช้แปลแชตเก่าจาก Claude Code');
 
-  // Switching to translate saves it; the label, sizes and banner follow.
+  // Switching to translate saves it; the label follows, nothing waits for the translator.
   modes[1].listeners.click();
   await tick(50);
   assert.deepEqual(puts.at(-1), { sendMode: 'translate' });
-  assert.equal(byId.picker.textContent, 'แปล 4B · Claude ค่าเริ่มต้น');
-  assert.equal(byId['model-banner'].hidden, false, 'translate mode shows the loading banner');
+  assert.equal(byId.picker.textContent, 'แปลกลับ · Claude ค่าเริ่มต้น');
+  assert.equal(byId['model-banner'].hidden, true, 'translate mode shows no translator banner');
   const again = find(byId.messages, (e) => e.tagName === 'button' && e.textContent === 'ส่งใหม่');
-  assert.equal(again.disabled, true, 'translate mode waits for the translator');
+  assert.equal(again.disabled, false, 'translate mode does not wait for the translator');
+  byId.picker.listeners.click();
+  assert.equal(sizesOf().some((b) => b.disabled), false, 'translate: sizes enabled');
+  assert.equal(sectionHint(), 'ใช้แปลแชตเก่าจาก Claude Code');
+  byId.picker.listeners.click();
 
   // Ready: polling stops, so the test process can exit.
   model = { state: 'ready', progress: 1, error: null, size: '4b' };

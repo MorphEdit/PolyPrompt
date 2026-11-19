@@ -1,5 +1,6 @@
-// #67: direct mode ("ส่งตรง") sends the message as typed and is the default;
-// translate mode keeps the old pipeline and loads the translator on first need.
+// #67: direct mode ("ส่งตรง") sends the message as typed and is the default.
+// Since #71 translate mode needs no local translator either (Claude Haiku
+// translates the answer back); the tests on its old pipeline follow that.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -88,14 +89,16 @@ async function appSetup(t, { sendMode, ready = false, gateRunner = false } = {})
   const chatStore = createChatStore({ dir: path.join(dir, 'chats') });
   const pending = createPending();
   const detect = (text) => (/[฀-๿]/.test(text) ? { kind: 'ok', lang: 'th' } : { kind: 'ok', lang: 'en' });
-  const deps = { modelManager, chatStore, settings, runner, pending, detect, publicDir: dir };
+  const backs = [];
+  const backTranslate = async ({ text, targetLang }) => { backs.push([text, targetLang]); return `<${targetLang}>${text}`; };
+  const deps = { modelManager, chatStore, settings, runner, pending, detect, publicDir: dir, backTranslate };
   const server = createApp(deps);
   const { port } = await listen(server);
   t.after(() => close(server));
   const json = (method, p, body) => request(port, method, p, {
     headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return { dir, file, settings, modelManager, loader, translator, calls, runs, gates, chatStore, pending, deps, port, json };
+  return { dir, file, settings, modelManager, loader, translator, calls, backs, runs, gates, chatStore, pending, deps, port, json };
 }
 
 // ---- AC2: a direct turn ----
@@ -133,11 +136,16 @@ test('runTurn without a mode reads sendMode from settings; without settings it t
   const m2 = { id: 'm2', role: 'user', original: 'ขอบคุณ', english: null, lang: null, createdAt: 'x' };
   chat.messages.push(m2);
   await runTurn(noSettings, chat, m2);
-  assert.deepEqual(s.calls.map((c) => [c[1], c[2]]), [['th', 'en'], ['en', 'th']], 'no settings: translate');
-  assert.equal(s.runs[1].prompt, '<en>ขอบคุณ');
-  // AC8: the old translate reply still shows its English original, the direct one does not.
+  // No settings: translate (#71: sent as typed, asked for English).
+  assert.equal(s.runs[1].prompt, 'ขอบคุณ');
+  assert.equal(s.runs[1].replyInEnglish, true);
+  assert.equal(s.runs[0].replyInEnglish, false);
+  assert.equal(s.calls.length, 0, 'never the local translator');
+  // The fake answer is already Thai: shown as is, no back-translation.
+  assert.deepEqual(s.backs, []);
+  // AC8: an old translate reply still shows its English original, the direct one does not.
   assert.equal(showsEnglish(chat.messages[1]), false);
-  assert.equal(showsEnglish(chat.messages[3]), true);
+  assert.equal(showsEnglish({ role: 'assistant', original: '<th>Hi', english: 'Hi', lang: 'th' }), true);
 });
 
 // ---- AC4: routes ----
@@ -170,9 +178,27 @@ test('a direct send and retry succeed while the translator is not loaded, starti
   assert.equal(s.loader.calls.length, 0, 'the translator was never loaded');
 });
 
-test('a translate send or retry is still refused while the translator is not ready', async (t) => {
-  const s = await appSetup(t, { sendMode: 'translate' });
-  assert.equal((await s.json('POST', '/api/messages', { text: 'สวัสดี' })).status, 503);
+test('#71: a translate send and retry succeed while the translator is not ready, and load nothing', async (t) => {
+  const s = await appSetup(t, { sendMode: 'translate', gateRunner: true });
+  assert.equal(s.modelManager.isReady(), false);
+  const r = await s.json('POST', '/api/messages', { text: 'สวัสดี' });
+  assert.equal(r.status, 202);
+  assert.equal(s.pending.get(r.json.chatId), 'thinking', 'never translating');
+  await until(() => s.gates.length);
+  s.gates.shift().reject(Object.assign(new Error('boom'), { kind: 'failed' }));
+  await until(() => !s.pending.get(r.json.chatId));
+  let chat = await s.chatStore.get(r.json.chatId);
+  assert.ok(chat.messages[0].error);
+  const retry = await s.json('POST', `/api/chats/${chat.id}/messages/${chat.messages[0].id}/retry`);
+  assert.equal(retry.status, 202);
+  await until(() => s.gates.length);
+  s.gates.shift().resolve();
+  await until(() => !s.pending.get(chat.id));
+  chat = await s.chatStore.get(chat.id);
+  assert.equal(chat.messages[1].original, 'ตอบ: สวัสดี');
+  assert.deepEqual(s.runs.map((o) => [o.prompt, o.replyInEnglish]), [['สวัสดี', true], ['สวัสดี', true]]);
+  assert.equal(s.calls.length, 0);
+  assert.equal(s.loader.calls.length, 0, 'the translator was never loaded');
 });
 
 test('a direct request whose turn starts after a switch to translate stays direct', async (t) => {
@@ -202,7 +228,7 @@ test('a direct request whose turn starts after a switch to translate stays direc
 
 // ---- AC1 (API) and AC5: lazy translator ----
 
-test('sendMode goes through the settings API; switching to translate starts the translator load', async (t) => {
+test('sendMode goes through the settings API; switching to translate starts no translator load (#71)', async (t) => {
   const s = await appSetup(t);
   let r = await s.json('GET', '/api/settings');
   assert.equal(r.json.sendMode, 'direct');
@@ -212,15 +238,14 @@ test('sendMode goes through the settings API; switching to translate starts the 
   assert.equal(r.status, 200);
   assert.equal(r.json.sendMode, 'translate');
   assert.equal(JSON.parse(await readFile(s.file, 'utf8')).sendMode, 'translate');
-  assert.equal(s.loader.calls.length, 1, 'the translator load started');
+  assert.equal(s.loader.calls.length, 0, 'no translator load');
   assert.equal((await s.json('GET', '/api/settings')).json.sendMode, 'translate');
-  // Switching again does not start a second load.
   await s.json('PUT', '/api/settings', { sendMode: 'direct' });
   await s.json('PUT', '/api/settings', { sendMode: 'translate' });
-  assert.equal(s.loader.calls.length, 1);
+  assert.equal(s.loader.calls.length, 0);
 });
 
-test('startup in direct mode downloads nothing; translate mode starts the download', async (t) => {
+test('startup downloads nothing in either mode; switching to translate starts no download (#71)', async (t) => {
   const { start } = await import('../src/main.js');
   for (const sendMode of ['direct', 'translate']) {
     const dir = await tempDir(t);
@@ -241,9 +266,11 @@ test('startup in direct mode downloads nothing; translate mode starts the downlo
         headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sendMode: 'translate' }),
       });
       assert.equal(r.status, 200);
-      assert.deepEqual(downloads, ['4b'], 'switching to translate starts it');
+      assert.deepEqual(downloads, [], 'switching to translate starts nothing');
+      assert.deepEqual(loads, []);
     } else {
-      assert.deepEqual(downloads, ['4b'], 'translate: startup unchanged');
+      assert.deepEqual(downloads, [], 'translate: no download at startup');
+      assert.deepEqual(loads, []);
     }
   }
 });
@@ -286,12 +313,12 @@ test('in direct mode opening an old session starts the translator load; listing 
 
 // ---- AC6 / AC7: front-end logic ----
 
-test('in direct mode sending and retrying ignore the translator state', () => {
+test('in both modes sending and retrying ignore the translator state (#71)', () => {
   for (const modelState of ['loading', 'error', undefined]) {
     assert.equal(canSend({ text: 'hi', pending: false, modelState, lastMessageHasError: false, sendMode: 'direct' }), true);
     assert.equal(retryEnabled({ pending: false, modelState, sendMode: 'direct' }), true);
-    assert.equal(canSend({ text: 'hi', pending: false, modelState, lastMessageHasError: false, sendMode: 'translate' }), false);
-    assert.equal(retryEnabled({ pending: false, modelState, sendMode: 'translate' }), false);
+    assert.equal(canSend({ text: 'hi', pending: false, modelState, lastMessageHasError: false, sendMode: 'translate' }), true);
+    assert.equal(retryEnabled({ pending: false, modelState, sendMode: 'translate' }), true);
   }
   // Everything else is as before.
   assert.equal(canSend({ text: ' ', pending: false, modelState: 'loading', lastMessageHasError: false, sendMode: 'direct' }), false);
@@ -302,13 +329,14 @@ test('in direct mode sending and retrying ignore the translator state', () => {
   assert.equal(retryEnabled({ pending: false, modelState: 'ready', sendMode: 'translate' }), true);
 });
 
-test('the picker label, size options and banner follow the mode', () => {
-  assert.deepEqual(SEND_MODE_OPTIONS.map((o) => o.label), ['ส่งตรง (แนะนำ)', 'แปลเป็นอังกฤษก่อน']);
+test('the picker label follows the mode; sizes and banner do not (#71)', () => {
+  assert.deepEqual(SEND_MODE_OPTIONS.map((o) => o.label), ['ส่งตรง (แนะนำ)', 'ตอบเป็นอังกฤษแล้วแปลกลับ']);
   assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'claude-opus-5-5', sendMode: 'direct' }), 'ส่งตรง · Claude Opus 5.5');
-  assert.equal(pickerLabel({ translatorSize: '12b', claudeModel: 'default', sendMode: 'translate' }), 'แปล 12B · Claude ค่าเริ่มต้น');
-  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'ready', sendMode: 'direct' }), true);
+  assert.equal(pickerLabel({ translatorSize: '12b', claudeModel: 'default', sendMode: 'translate' }), 'แปลกลับ · Claude ค่าเริ่มต้น');
+  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'ready', sendMode: 'direct' }), false);
   assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'ready', sendMode: 'translate' }), false);
   assert.equal(modelBannerShown({ sendMode: 'direct' }), false);
   assert.equal(modelBannerShown({ sendMode: 'direct', sessionWaiting: true }), true);
-  assert.equal(modelBannerShown({ sendMode: 'translate' }), true);
+  assert.equal(modelBannerShown({ sendMode: 'translate' }), false);
+  assert.equal(modelBannerShown({ sendMode: 'translate', sessionWaiting: true }), true);
 });

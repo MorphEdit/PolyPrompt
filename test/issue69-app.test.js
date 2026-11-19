@@ -67,11 +67,11 @@ test('picker marks the current send mode as selected, in both modes', async () =
   const names = () => modes().map((b) => b.children[0].textContent);
 
   byId.picker.listeners.click();
-  assert.deepEqual(names(), ['ส่งตรง (แนะนำ)', 'แปลเป็นอังกฤษก่อน']);
+  assert.deepEqual(names(), ['ส่งตรง (แนะนำ)', 'ตอบเป็นอังกฤษแล้วแปลกลับ']);
   assert.deepEqual(selected(), [true, false], 'direct: "ส่งตรง (แนะนำ)" has the ✓');
 
   modes()[1].listeners.click();
   await tick(50);
   byId.picker.listeners.click();
-  assert.deepEqual(selected(), [false, true], 'translate: "แปลเป็นอังกฤษก่อน" has the ✓');
+  assert.deepEqual(selected(), [false, true], 'translate: "ตอบเป็นอังกฤษแล้วแปลกลับ" has the ✓');
 });

@@ -80,7 +80,7 @@ test('settings default to settings.json next to the chats dir and are read back 
   const loads = [];
   const load = (onProgress, { size }) => { loads.push(size); return Promise.resolve({ translate: async (s) => s }); };
   const opts = { port: 0, load, download: async () => {}, downloaded: (s) => s === '4b' || s === '12b', chatsDir };
-  // Translate mode loads the translator at startup (direct mode, the default, does not).
+  // #71: no mode loads the translator at startup; a size pick loads that size.
   writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ sendMode: 'translate' }));
   let server = await start(opts);
   let port = server.address().port;
@@ -102,13 +102,12 @@ test('settings default to settings.json next to the chats dir and are read back 
   server = await start(opts);
   t.after(() => close(server));
   port = server.address().port;
-  for (let i = 0; i < 100 && (await request(port, 'GET', '/api/status')).json.model.state !== 'ready'; i++) {
-    await new Promise((res) => setTimeout(res, 10));
-  }
   r = await request(port, 'GET', '/api/settings');
   assert.deepEqual(r.json, { translatorSize: '12b', claudeModel: 'claude-haiku-5-5', sendMode: 'translate', downloadedSizes: ['4b', '12b'] });
-  assert.equal((await request(port, 'GET', '/api/status')).json.model.size, '12b');
-  assert.deepEqual(loads, ['4b', '12b', '12b']);
+  const status = (await request(port, 'GET', '/api/status')).json;
+  assert.equal(status.model.size, '12b');
+  assert.equal(status.idle, true, 'translate mode does not start the translator');
+  assert.deepEqual(loads, ['12b']);
 });
 
 test('start() takes an explicit settingsFile', async (t) => {

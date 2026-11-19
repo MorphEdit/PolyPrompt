@@ -56,3 +56,10 @@ export function detectLanguage(text, { languages = LANGUAGES, minLength = MIN_LE
   if (!code) return { kind: 'unsure', lang: null };
   return Object.hasOwn(languages, code) ? { kind: 'ok', lang: code } : { kind: 'unsupported', lang: null };
 }
+
+// Translate mode translates answers back with Claude, which writes every
+// language: all 60 eld/medium languages (LANGUAGES and UNSUPPORTED).
+export const REPLY_LANGUAGES = {
+  ...LANGUAGES,
+  ...Object.fromEntries(UNSUPPORTED.map((code) => [code, new Intl.DisplayNames(['en'], { type: 'language' }).of(code) ?? code])),
+};

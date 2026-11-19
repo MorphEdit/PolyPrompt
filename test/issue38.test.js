@@ -74,7 +74,7 @@ test('#38 picker lists Fable and versioned names in order, each with a one-line 
   assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.value), ['default', ...IDS]);
   assert.deepEqual(CLAUDE_OPTIONS.map((o) => o.label), ['ค่าเริ่มต้น', 'Fable 5.2', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5']);
   for (const o of CLAUDE_OPTIONS) assert.match(o.hint, /^[^\n]*[฀-๿][^\n]*$/, o.value);
-  assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'claude-fable-5-2' }), 'แปล 4B · Claude Fable 5.2');
+  assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'claude-fable-5-2' }), 'แปลกลับ · Claude Fable 5.2');
 });
 
 test('#38 the runner reports the model that answered from modelUsage', async () => {

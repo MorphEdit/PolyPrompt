@@ -7,9 +7,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FOLDER_ALLOWED_TOOLS, SYSTEM_PROMPT, createClaudeRunner } from '../src/claude.js';
+import { ENGLISH_SYSTEM_PROMPT, FOLDER_ALLOWED_TOOLS, REPLY_IN_ENGLISH, SYSTEM_PROMPT, createClaudeRunner } from '../src/claude.js';
 import { createModelManager } from '../src/model.js';
-import { createPending } from '../src/pipeline.js';
+import { ANSWER_NOT_TRANSLATED_NOTE, createPending } from '../src/pipeline.js';
 import { createApp } from '../src/server.js';
 import { createChatStore } from '../src/store.js';
 import { DENY_MESSAGE } from '../src/stream.js';
@@ -45,11 +45,23 @@ async function setup(t, { timeoutMs = 300000 } = {}) {
   modelManager.start();
   loader.calls[0].resolve(translator);
   await tick();
+  // The Haiku back-translation (#71), faked: tags the text with its target.
+  const back = {
+    calls: [],
+    gate: null,
+    translate: async ({ text, targetLang, signal }) => {
+      back.calls.push({ text, targetLang, signal });
+      if (back.gate) await back.gate(signal);
+      return `<${targetLang}>${text}`;
+    },
+  };
   const home = path.join(base, 'claude-home');
   const runner = createClaudeRunner({ command: SCRIPT, cwd: home, timeoutMs });
   const pending = createPending();
   const detect = (text) => (THAI.test(text) ? { kind: 'ok', lang: 'th' } : { kind: 'ok', lang: 'en' });
-  const server = createApp({ modelManager, chatStore, publicDir: base, runner, pending, detect, projectsDir: path.join(base, 'projects') });
+  const server = createApp({
+    modelManager, chatStore, publicDir: base, runner, pending, detect, projectsDir: path.join(base, 'projects'), backTranslate: back.translate,
+  });
   const { port } = await listen(server);
   t.after(() => new Promise((r) => { server.close(r); server.closeAllConnections(); }));
 
@@ -82,7 +94,7 @@ async function setup(t, { timeoutMs = 300000 } = {}) {
       return r.json.chatId;
     },
   };
-  return { api, base, folder, home, chatStore, translator, pending };
+  return { api, base, folder, home, chatStore, translator, back, pending };
 }
 
 test('a folder sent with the first message is stored on the chat and used as the claude cwd, with Claude Code defaults', async (t) => {
@@ -97,6 +109,8 @@ test('a folder sent with the first message is stored on the chat and used as the
   assert.equal(path.resolve(log.cwd), path.resolve(folder));
   assert.equal(log.argv[log.argv.indexOf('--allowedTools') + 1], FOLDER_ALLOWED_TOOLS);
   for (const flag of ['--tools', '--strict-mcp-config', '--setting-sources', '--system-prompt']) assert.ok(!log.argv.includes(flag), flag);
+  // Translate mode (no settings): Claude Code's own prompt plus the English-reply sentence.
+  assert.equal(log.argv[log.argv.indexOf('--append-system-prompt') + 1], REPLY_IN_ENGLISH);
   assert.equal(log.argv[log.argv.indexOf('--permission-prompt-tool') + 1], 'stdio');
 
   // The follow-up resumes in the same folder; folder with chatId is refused.
@@ -120,7 +134,10 @@ test('a chat without a folder keeps the general assistant with web tools only, i
   const log = await api.log();
   assert.equal(path.resolve(log.cwd), path.resolve(home));
   assert.equal(log.argv[log.argv.indexOf('--tools') + 1], 'WebSearch,WebFetch');
-  assert.equal(log.argv[log.argv.indexOf('--system-prompt') + 1], SYSTEM_PROMPT);
+  // Translate mode (no settings): the general prompt plus the English-reply sentence.
+  assert.equal(log.argv[log.argv.indexOf('--system-prompt') + 1], ENGLISH_SYSTEM_PROMPT);
+  assert.ok(ENGLISH_SYSTEM_PROMPT.startsWith(SYSTEM_PROMPT));
+  assert.ok(!log.argv.includes('--append-system-prompt'));
 });
 
 test('a bad folder on the first message: 400 relative, 404 missing or a file; no chat is made', async (t) => {
@@ -291,7 +308,7 @@ test('a stored git status rule does not auto-allow a command chained with a sing
 });
 
 test('cards, activity and commands are never passed through the translator', async (t) => {
-  const { api, folder, translator } = await setup(t);
+  const { api, folder, translator, back } = await setup(t);
   const command = 'git commit -m "secret command text"';
   await api.script([
     init('s-tr'),
@@ -306,13 +323,14 @@ test('cards, activity and commands are never passed through the translator', asy
   await api.answer(id, 'r1', { token: chat.live.card.token, decision: 'allow' });
   const done = await api.idle(id);
   assert.equal(done.messages[1].original, '<th>Committing now.');
-  assert.deepEqual(translator.calls, ['ช่วย commit ให้หน่อย', 'Committing now.']);
+  assert.deepEqual(translator.calls, []);
+  assert.deepEqual(back.calls.map((c) => c.text), ['Committing now.']);
   const forbidden = [command, 'secret command text', 'command output text', chat.live.card.text, ...chat.live.activity.map((a) => a.text)];
-  for (const call of translator.calls) for (const text of forbidden) assert.ok(!call.includes(text), `${text} was translated`);
+  for (const call of back.calls) for (const text of forbidden) assert.ok(!call.text.includes(text), `${text} was translated`);
 });
 
 test('stop denies the open card, kills claude and saves the text so far with stopped: true; the next message resumes', async (t) => {
-  const { api, folder } = await setup(t);
+  const { api, folder, back } = await setup(t);
   await api.script([
     init('s-stop'),
     say('I started the work.'),
@@ -330,7 +348,10 @@ test('stop denies the open card, kills claude and saves the text so far with sto
   assert.equal(user.error, undefined);
   assert.equal(reply.stopped, true);
   assert.equal(reply.english, 'I started the work.');
-  assert.equal(reply.original, '<th>I started the work.');
+  // #71: a partial answer is never translated back; it shows in English with the note.
+  assert.equal(reply.original, 'I started the work.');
+  assert.equal(reply.note, ANSWER_NOT_TRANSLATED_NOTE);
+  assert.equal(back.calls.length, 0);
   assert.deepEqual(reply.activity.map((a) => a.text), ['🔍 กำลังอ่าน `x.js`']);
   assert.equal(chat.sessionId, 's-stop');
   const log = await api.log();
@@ -347,8 +368,8 @@ test('stop denies the open card, kills claude and saves the text so far with sto
   assert.equal(next.argv[next.argv.indexOf('--resume') + 1], 's-stop');
 });
 
-test('stop before any session id keeps the previous one; stop is 409 while translating', async (t) => {
-  const { api, translator } = await setup(t);
+test('stop before any session id keeps the previous one; stop during translating_back aborts it and keeps the English answer', async (t) => {
+  const { api, back } = await setup(t);
   await api.script([init('s-first'), result('first', 's-first')]);
   const id = await api.start({ text: 'hello' });
   await api.idle(id);
@@ -368,15 +389,23 @@ test('stop before any session id keeps the previous one; stop is 409 while trans
   assert.equal(chat.messages.at(-1).stopped, true);
   assert.equal(chat.messages.at(-1).original, '');
 
-  const gate = deferred();
-  translator.gate = () => gate.promise;
-  await api.script([result('x', 's-first')]);
+  // The back-translation rejects once its signal is aborted, like the real call.
+  back.gate = (signal) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('stopped')), { once: true });
+  });
+  await api.script([result('The answer.', 's-first')]);
   assert.equal((await api.send({ text: 'สวัสดี', chatId: id })).status, 202);
-  await api.until(id, (c) => c.pendingStep === 'translating', 'translating');
-  assert.equal((await api.stop(id)).status, 409);
-  translator.gate = null;
-  gate.resolve();
-  await api.idle(id);
+  await api.until(id, (c) => c.pendingStep === 'translating_back', 'translating_back');
+  assert.equal((await api.stop(id)).status, 202);
+  const after = await api.idle(id);
+  assert.equal(back.calls.length, 1);
+  assert.equal(back.calls[0].signal.aborted, true);
+  const reply = after.messages.at(-1);
+  assert.equal(reply.original, 'The answer.');
+  assert.equal(reply.english, 'The answer.');
+  assert.equal(reply.note, ANSWER_NOT_TRANSLATED_NOTE);
+  assert.equal(reply.stopped, undefined);
+  assert.equal(after.sessionId, 's-first');
 });
 
 test('a failed turn keeps the streamed session id and drops its partial text and activity; retry resumes it', async (t) => {

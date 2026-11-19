@@ -46,10 +46,12 @@ test('canSend: false while a reply is pending', () => {
   assert.equal(canSend({ ...ok, pending: true }), false);
 });
 
-test('canSend: false while the model is loading or failed', () => {
-  assert.equal(canSend({ ...ok, modelState: 'loading' }), false);
-  assert.equal(canSend({ ...ok, modelState: 'error' }), false);
-  assert.equal(canSend({ ...ok, modelState: undefined }), false);
+test('canSend: the translator state does not matter in any mode (#71)', () => {
+  for (const sendMode of ['translate', 'direct', undefined]) {
+    assert.equal(canSend({ ...ok, sendMode, modelState: 'loading' }), true);
+    assert.equal(canSend({ ...ok, sendMode, modelState: 'error' }), true);
+    assert.equal(canSend({ ...ok, sendMode, modelState: undefined }), true);
+  }
 });
 
 test('canSend: false when the last message has an error', () => {
@@ -184,16 +186,16 @@ test('the page loads no remote resources', async () => {
   assert.match(index, /<script type="module" src="\/app.js"><\/script>/);
 });
 
-test('retryEnabled: only when no reply is pending and the model is ready', () => {
+test('retryEnabled: only when no reply is pending, whatever the translator state (#71)', () => {
   assert.equal(retryEnabled({ pending: false, modelState: 'ready' }), true);
   assert.equal(retryEnabled({ pending: true, modelState: 'ready' }), false);
-  assert.equal(retryEnabled({ pending: false, modelState: 'loading' }), false);
-  assert.equal(retryEnabled({ pending: false, modelState: 'error' }), false);
+  assert.equal(retryEnabled({ pending: false, modelState: 'loading' }), true);
+  assert.equal(retryEnabled({ pending: false, modelState: 'error' }), true);
 });
 
 test('picker label shows both current choices', () => {
-  assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'default' }), 'แปล 4B · Claude ค่าเริ่มต้น');
-  assert.equal(pickerLabel({ translatorSize: '27b', claudeModel: 'claude-opus-5-5' }), 'แปล 27B · Claude Opus 5.5');
+  assert.equal(pickerLabel({ translatorSize: '4b', claudeModel: 'default' }), 'แปลกลับ · Claude ค่าเริ่มต้น');
+  assert.equal(pickerLabel({ translatorSize: '27b', claudeModel: 'claude-opus-5-5', sendMode: 'translate' }), 'แปลกลับ · Claude Opus 5.5');
 });
 
 test('picker options: three sizes with hints, five Claude models', () => {
@@ -227,6 +229,8 @@ test('size options are disabled while a size download or a load runs, enabled in
   assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'loading' }), true);
   assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'ready', switchState: 'downloading' }), true);
   assert.equal(sizeOptionsDisabled({ pending: true, modelState: 'ready' }), true);
+  // A translator never started (#71: no send mode starts it) takes picks.
+  assert.equal(sizeOptionsDisabled({ pending: false, modelState: 'idle' }), false);
 });
 
 test('picking a size: loaded does nothing, downloaded switches, missing asks first', () => {
